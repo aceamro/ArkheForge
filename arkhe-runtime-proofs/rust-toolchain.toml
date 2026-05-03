@@ -1,0 +1,9 @@
+# Kani 0.67.0 toolchain pin. Kani requires nightly per its release
+# notes; production ArkheKernel workspace remains on stable 1.80
+# (cycle plan v0.4 D-USER-3 (c) Q4(a) — toolchain isolation via
+# workspace exclusion + this rust-toolchain.toml).
+
+[toolchain]
+channel    = "nightly-2025-11-21"
+components = ["rust-src", "rustc-dev", "llvm-tools-preview"]
+profile    = "minimal"

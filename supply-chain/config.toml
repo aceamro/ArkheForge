@@ -1,0 +1,94 @@
+# cargo-vet config — supply-chain transitive dependency approval chain.
+#
+# 사용:
+#   cargo install cargo-vet
+#   cargo vet init                     # 최초 1회
+#   cargo vet                          # crates.io fetch 후 approval 검사
+#   cargo vet diff <crate> <old> <new> # 버전 차이 review
+#
+# Trust base: Google / Mozilla / Bytecode Alliance audit import.
+# Runtime crate 별 criteria 지정.
+
+[cargo-vet]
+version = "0.10"
+
+# Criteria 정의 — Runtime 기본.
+# `safe-to-deploy`: production binary 에 포함 가능.
+# `safe-to-run`: test/build script 에만 사용 가능.
+[[criteria.safe-to-deploy]]
+description = "Production binary 에 포함 가능. RCE / supply chain backdoor 없음."
+
+[[criteria.safe-to-run]]
+description = "Build / test 환경에서만 실행. Binary 포함 금지."
+
+# 외부 audit import — 3대 trust base.
+[imports.google]
+url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.toml"
+
+[imports.mozilla]
+url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
+# Workspace crate 별 criteria.
+[policy.arkhe-kernel]
+criteria = "safe-to-deploy"
+
+[policy.arkhe-macros]
+criteria = "safe-to-deploy"
+
+[policy.arkhe-forge-core]
+criteria = "safe-to-deploy"
+
+[policy.arkhe-forge-platform]
+criteria = "safe-to-deploy"
+
+[policy.arkhe-forge]
+criteria = "safe-to-deploy"
+
+# Note (m12): `arkhe-shell-bbs` 는 본 workspace 외부 repo 로 split (2026-04-24).
+# Shell repo 자체의 `supply-chain/config.toml` 에서 정책 관리. 본 파일에는
+# orphan policy entry 를 두지 않는다 — `cargo vet` 가 unknown policy 로
+# 읽지 않게.
+#
+# 본 workspace 에 shell crate 가 다시 추가될 경우 (예: `arkhe-shell-casino`,
+# `arkhe-shell-forum`) 동일한 `[policy.<name>] criteria = "safe-to-deploy"`
+# block 을 추가한다.
+
+# Testkit + lint helpers 는 test-only.
+[policy.arkhe-runtime-testkit]
+criteria = "safe-to-run"
+
+[policy.arkhe-trait-default-check]
+criteria = "safe-to-run"
+
+[policy.arkhe-subset-rust-check]
+criteria = "safe-to-run"
+
+# Domain demo 는 test-only.
+
+[policy.dice-domain]
+criteria = "safe-to-run"
+
+# ── Exemptions ─────────────────────────────────────────────────────────────
+# 초기 상태 empty. `cargo vet init` 최초 실행 시 workspace dep 전체 scan
+# 후 audit 되지 않은 crate 가 자동 추가됨. 각 exemption 은 다음 형식:
+#
+#   [[exemptions.<crate-name>]]
+#   version = "1.2.3"
+#   criteria = "safe-to-deploy"
+#   notes = "<audit 미완료 사유 + 향후 audit 계획>"
+#
+# 목표: release 전 exemptions 수 → 0 (전체 audit 완료 또는 trust base
+# import 에 흡수). Release gate 의 cargo-vet / cargo-audit pass 달성 경로.
+#
+# 사용 절차:
+#   cargo install cargo-vet
+#   cargo vet init                     # 최초 1회 — exemption 자동 채움
+#   cargo vet                          # audit status 검사
+#   cargo vet diff <crate> <old> <new> # 버전 차이 review
+#   cargo vet prune                    # 사용하지 않는 exemption 제거
+
+[exemptions]
+# (empty — cargo vet init 실행 이후 채움)

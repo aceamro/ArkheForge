@@ -1,0 +1,30 @@
+[package]
+name          = "arkhe-trait-default-check"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Lint crate for ArkheForge Runtime: detects semantic changes to trait default-method bodies via AST fingerprinting. Enforces the Minor-1 breaking-change rule in CI."
+keywords      = ["lint", "trait", "stability", "fingerprint", "arkhe"]
+categories    = ["development-tools", "development-tools::testing"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-trait-default-check"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+publish       = false
+
+[lib]
+# Current release ships AST fingerprint helpers as a regular lib. A future
+# release switches to `cdylib` + dylint driver so the lint fires via
+# `cargo dylint`. See src/lib.rs rustdoc for the rationale.
+crate-type = ["lib"]
+
+[dependencies]
+syn        = { version = "2", features = ["full", "visit"] }
+proc-macro2 = "1"
+quote      = "1"
+blake3     = { workspace = true }
+
+[lints]
+workspace = true

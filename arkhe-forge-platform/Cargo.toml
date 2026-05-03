@@ -1,0 +1,121 @@
+[package]
+name          = "arkhe-forge-platform"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "L2 services for ArkheForge Runtime: projection observer, manifest loader, policy, rate limiter, audit receipts, crypto-erasure coordinator, process-protection shim. Builds on L0 arkhe-kernel + L1 arkhe-forge-core."
+keywords      = ["runtime", "projection", "manifest", "crypto-erasure", "arkhe-forge"]
+categories    = ["database", "cryptography"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-forge-platform"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[dependencies]
+arkhe-kernel = { path = "../../ArkheKernel/arkhe-kernel", version = "0.13" }
+arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.13" }
+serde               = { workspace = true }
+postcard            = { workspace = true }
+blake3              = { workspace = true }
+ed25519-dalek       = { workspace = true }
+bytes               = { workspace = true }
+thiserror           = { workspace = true }
+toml                = { workspace = true }
+# Compile-time `assert_not_impl_any!(BufferedWalSink: std::io::Seek)` —
+# enforces the `WalRecordSink` trait's append-only invariant from
+# the *implementation* side (the trait surface alone cannot compel
+# concrete impls to NOT impl Seek). Cycle F.2 firm-contract carry-
+# forward.
+static_assertions   = { workspace = true }
+
+# Spec §14.9.1 Compliance Tier — activated from Tier-1 upward.
+argon2              = { workspace = true, optional = true }
+chacha20poly1305    = { workspace = true, optional = true }
+aes-gcm             = { workspace = true, optional = true }
+aes-gcm-siv         = { workspace = true, optional = true }
+# Key material lifecycle — always-on (used by the coordinator regardless of Tier).
+zeroize             = { workspace = true }
+# Shamir `t-of-n` secret sharing (`hf2_kms::threshold`) draws polynomial
+# coefficients from the OS CSPRNG. `getrandom` is already a transitive dep via
+# the AEAD crates; declaring it directly lets the threshold path fail with a
+# typed error instead of leaking the AEAD-feature cfg.
+getrandom           = { version = "0.2", default-features = false, features = ["std"] }
+
+# Tier-2 AWS KMS backend — opt-in via `tier-2-aws-kms`. The async-only
+# `aws-sdk-kms` is bridged to the sync `KmsBackend` trait through an
+# `AwsKmsBackend`-owned `tokio` current-thread runtime (spec §14.11.2
+# HF2 backend boundary). `aws-config` provides the credential loader.
+aws-sdk-kms         = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
+aws-config          = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
+tokio               = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"], optional = true }
+
+# Tier-2 Hook host v2 + Observer host v2 — wasmtime preview-2 + WASI
+# sandbox embedding. Both hosts share the wasmtime runtime; Cargo dedup
+# pulls the dep once when either feature is enabled.
+#
+# - Hook host v2 (spec §14.5 / E14.L2-Allow) — chain-affecting compute
+#   path; pinned NaN canonicalisation + SIMD off + 10 ms fuel budget +
+#   `arkhe:hook/{state, emit, fuel}` ALLOW; `wasi:random/*` /
+#   `wasi:clocks/*` DENY.
+# - Observer host v2 (spec §14.5.1 / E15) — chain-non-affecting
+#   side-effect path; fuel-metering only (no determinism axes pinned —
+#   observer execution does not contribute to the chain hash) +
+#   `arkhe:observer/*` capability-token allow set + same WASI deny.
+#
+# Build-time + binary-size cost is significant (~50 transitive crates /
+# ~5-10 MB release size), hence the per-host opt-in gate.
+wasmtime            = { version = "~43.0.1", default-features = false, features = ["cranelift", "runtime"], optional = true }
+wasmtime-wasi       = { version = "~43.0.1", default-features = false, optional = true }
+
+[features]
+# Feature flag surface (spec §4 boundary).
+default          = []                                             # Tier-0 dev only
+tier-1-kms       = ["argon2", "chacha20poly1305"]                 # Tier-1 KMS free-tier
+tier-2-multi-kms = ["tier-1-kms", "aes-gcm", "aes-gcm-siv"]       # Tier-2 production AEAD surface
+# KMS backend opt-ins — orthogonal to AEAD tiering. Each cloud vendor gets its
+# own `tier-2-<vendor>-kms` flag so operators can select exactly the backends
+# they need. The `KmsBackend` trait + `MockKmsBackend` are always available.
+tier-2-aws-kms   = ["aws-sdk-kms", "aws-config", "tokio"]
+# Tier-2 Hook host v2 — opt-in wasmtime + WASI preview-2 sandbox (spec
+# §14.5 / E14.L2-Allow runtime enforcement). Tier-0 / Tier-1 deployments
+# stay on `NoopHookHost`; Tier-2 enables the wasmtime-backed sandbox.
+tier-2-hook-host-v2 = ["wasmtime", "wasmtime-wasi"]
+# Tier-2 Observer host v2 — opt-in wasmtime + WASI preview-2 sandbox
+# (spec §14.5.1 / E15 Observer Capability Confinement). Independent of
+# `tier-2-hook-host-v2`: Tier-2 deployments may enable just the hook
+# sandbox, just the observer sandbox, or both. Tier-0 / Tier-1 stay on
+# `NoopObserverHost` (v1 alpha pass-through).
+tier-2-observer-host-v2 = ["wasmtime", "wasmtime-wasi"]
+pqc-hybrid       = []                                             # MlDsa65 + hybrid signing (preview)
+unstable         = []                                             # pre-freeze API opt-in
+
+# Platform FFI for `process_protection` (spec §14.9.1 §§12 HF1).
+# Linux + macOS share the libc surface (mlockall / prctl / setrlimit / ptrace);
+# Windows ships windows-sys with the Win32 subsystems we actually call.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_Debug",
+] }
+
+# Test-only deps. `wat` is used by `hook_host::capability_linker` tests
+# (gated by `tier-2-hook-host-v2`) to build small modules from inline WAT
+# without enabling the wasmtime crate's `wat` feature for production
+# builds. Cargo compiles dev-dependencies only for `cargo test` of this
+# crate, so consumers pay zero cost.
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

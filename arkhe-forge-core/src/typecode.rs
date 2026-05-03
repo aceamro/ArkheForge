@@ -1,0 +1,290 @@
+//! TypeCode allocation bounds — spec §3.2 (core sub-split).
+//!
+//! Pins the sub-ranges carved out of L0 `TypeCode(u32)` for Runtime use. Each
+//! Core 5 primitive allocates its specific TypeCode within these bounds; a
+//! downstream proc-macro check validates that every `#[arkhe(type_code = N)]`
+//! declaration falls in the right range.
+
+/// Kernel 예약 — L0.
+pub const KERNEL_RESERVED: (u32, u32) = (0x0000_0000, 0x0000_FFFF);
+
+/// ArkheForge core primitive Entity TypeCode.
+pub const CORE_ENTITY: (u32, u32) = (0x0001_0000, 0x0001_FFFF);
+
+/// Canonical Activity verb — 1023 slot.
+pub const CORE_VERB_CANONICAL: (u32, u32) = (0x0002_0001, 0x0002_03FF);
+
+/// Shell-extensible verb — shell_id BLAKE3 → 256-verb deterministic sub-range.
+pub const SHELL_VERB: (u32, u32) = (0x0002_0400, 0x0002_FFFF);
+
+/// ArkheForge core Component TypeCode.
+pub const CORE_COMPONENT: (u32, u32) = (0x0003_0000, 0x0003_0EFF);
+
+/// ArkheForge core Event TypeCode (sub-range split per spec §3.2).
+pub const CORE_EVENT: (u32, u32) = (0x0003_0F00, 0x0003_FFFF);
+
+/// `RoomMarker` TypeCode reservation (SHAPE-only at v0.12 per
+/// D-USER-5 (iii); spec §14.1.1 Room primitive — SHAPE-only declaration).
+///
+/// **Sealed-completeness mutual lock** (cryptographer Q7 anchor): this
+/// doc-only constant pairs with the spec-text declaration of
+/// `RoomMarker: EntityKind` in `runtime-book/src/en/architecture/14-open-questions.md`
+/// §14.1.1. Two sources together (spec text + code constant) prevent
+/// v0.13 implementers from accidentally re-allocating `0x0001_5001`
+/// for a different `EntityKind` impl — sealing-cut foreclosure
+/// preserved without committing the implementation surface.
+///
+/// **v0.12 first-cut scope** (SHAPE-only, Track C.2):
+///
+/// - `EntityKind` trait + per-marker `impl` blocks remain spec-text-
+///   only at v0.12 (deferred to v0.13 alongside the §14.6 ArkheUri
+///   implementation surface).
+/// - **0 Component / 0 Action / 0 VerbCode** allocations under
+///   `RoomMarker` at v0.12. Room-specific verbs land via the
+///   M-verbrange shell BLAKE3 sub-allocation pattern (§14.4) at v0.13,
+///   NOT as canonical verbs in `CORE_VERB_CANONICAL`.
+/// - Future v0.13+ cap-token family `arkhe:room/{join, post, leave, ...}`
+///   is an independent dimension — this constant reserves only the
+///   Entity TypeCode slot.
+///
+/// **Slot rationale**: next free in the `0x0001_X001` Core Entity
+/// sub-range progression — `UserMarker 0x0001_0001` /
+/// `ActorMarker 0x0001_1001` / `SpaceMarker 0x0001_2001` /
+/// `EntryMarker 0x0001_3001` / `ActivityMarker 0x0001_4001` /
+/// **`RoomMarker 0x0001_5001`**.
+pub const ROOM_MARKER_RESERVED: u32 = 0x0001_5001;
+
+/// Reserved for future Runtime-layer primitives.
+pub const RUNTIME_RESERVED: (u32, u32) = (0x0004_0000, 0x00FF_FFFF);
+
+/// Shell-scoped Component / Action.
+pub const SHELL_SCOPED: (u32, u32) = (0x0100_0000, 0xEFFF_FFFF);
+
+/// Debug / test 전용.
+pub const DEBUG_TEST: (u32, u32) = (0xF000_0000, 0xFFFF_FFFF);
+
+/// Core Event TypeCode pins (spec §3.2).
+///
+/// Each `#[derive(ArkheEvent)]` impl sets `#[arkhe(type_code = ...)]` to one
+/// of these constants. Adding a new Event requires updating this list and
+/// the spec §3.2 table in the same change.
+pub mod core_event {
+    /// `RuntimeBootstrap` — §14.7 / E12.
+    pub const RUNTIME_BOOTSTRAP: u32 = 0x0003_0F01;
+    /// `UserErasureScheduled` — §14.9 GDPR cascade.
+    pub const USER_ERASURE_SCHEDULED: u32 = 0x0003_0F02;
+    /// `UserErasureCompleted` — §14.9.1 crypto-shred receipt.
+    pub const USER_ERASURE_COMPLETED: u32 = 0x0003_0F03;
+    /// `BackupErasurePropagated` — §14.11.1 per-region propagation.
+    pub const BACKUP_ERASURE_PROPAGATED: u32 = 0x0003_0F04;
+    /// `GdprPolicyViolation` — §3.3 compute reject audit.
+    pub const GDPR_POLICY_VIOLATION: u32 = 0x0003_0F05;
+    /// `SignatureClassPolicy` — §14.7 FG5 chain-anchored policy / E13.
+    pub const SIGNATURE_CLASS_POLICY: u32 = 0x0003_0F06;
+    /// `CrossShellActivity` — §4.5 replay/admin reject audit.
+    pub const CROSS_SHELL_ACTIVITY: u32 = 0x0003_0F07;
+    /// `PerRegionErasureProgress` — §14.9.1 §§13 GF4 2PC.
+    pub const PER_REGION_ERASURE_PROGRESS: u32 = 0x0003_0F08;
+    /// `DekMigrationCompleted` — §14.7 alpha→beta DEK rotation receipt.
+    pub const DEK_MIGRATION_COMPLETED: u32 = 0x0003_0F09;
+    /// `ComplianceTierChange` — §14.11.2 Tier-{0,1,2} transition record.
+    pub const COMPLIANCE_TIER_CHANGE: u32 = 0x0003_0F0A;
+    /// `HookModuleRegister` — §14.5 / E14.L2 Hook host v2 chain-anchored
+    /// registration receipt. Track B.6 (DIP-N1 v0.12 sealing cycle).
+    pub const HOOK_MODULE_REGISTER: u32 = 0x0003_0F0B;
+    /// `ObserverQuarantine` — §14.5.2 / E15 Observer host v2 chain-anchored
+    /// trap-quarantine receipt. Track A.2.4 (DIP-N2 v0.12 sealing cycle).
+    /// Emitted by the runtime supervisor when an observer wasm execution
+    /// trips a sandbox-boundary failure — the host catches the trap +
+    /// generates this event so the chain anchors observer compromise
+    /// without observer wasm authorship of the receipt (cryptographer
+    /// chain-non-affecting clause 3 — host-supervised emission).
+    pub const OBSERVER_QUARANTINE: u32 = 0x0003_0F0C;
+
+    /// `ReplicaIdAllocation` — §14.7 federation-replica registration
+    /// receipt. Track H.1 (DIP-N3 v0.12 sealing cycle, define-only).
+    ///
+    /// **0-emission at v0.12** — runtime ships the type definition and
+    /// reserves the wire slot, but no production code path ever calls
+    /// `emit_event::<ReplicaIdAllocation>(..)`. Emission activates at
+    /// v0.99+ once the federation prerequisites (archive-hardening,
+    /// SignedArkheUri, identity federation layer per §15.5 / §14.7)
+    /// are met. The H.2 sub-step wraps the type definition behind the
+    /// `federation-archive-hardened` Cargo feature so default builds
+    /// do not even compile the type.
+    pub const REPLICA_ID_ALLOCATION: u32 = 0x0003_0F0D;
+
+    /// `AuditReceiptKeyPolicy` — §14.7 audit-receipt key inventory /
+    /// rotation manifest. Track H.1 (DIP-N3 v0.12 sealing cycle,
+    /// define-only).
+    ///
+    /// **0-emission at v0.12** — production code path never emits;
+    /// activation requires the operator-side carry-over (g) "audit-
+    /// receipt key identity declared in `release-keys.md §1`
+    /// inventory" (cryptographer Track H gate). H.2 wraps the type
+    /// behind the `audit-receipt-key-identified` Cargo feature.
+    pub const AUDIT_RECEIPT_KEY_POLICY: u32 = 0x0003_0F0E;
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// `ROOM_MARKER_RESERVED` lands in the Core Entity sub-range, next
+    /// free after `ActivityMarker 0x0001_4001` per §14.1.1 / §14.6
+    /// progression. v0.13 implementers must not collide.
+    #[test]
+    fn room_marker_reserved_value_is_pinned_to_v0_12_slot() {
+        assert_eq!(ROOM_MARKER_RESERVED, 0x0001_5001);
+    }
+
+    /// Sealed-completeness mutual lock (cryptographer Q7 anchor): the
+    /// reserved slot must lie inside the Core Entity sub-range.
+    /// Misallocation outside the range would silently break the
+    /// `EntityKind` v0.13 implementation surface.
+    #[test]
+    fn room_marker_reserved_lands_in_core_entity_subrange() {
+        let (lo, hi) = CORE_ENTITY;
+        assert!(
+            (lo..=hi).contains(&ROOM_MARKER_RESERVED),
+            "ROOM_MARKER_RESERVED 0x{ROOM_MARKER_RESERVED:08x} must lie in CORE_ENTITY \
+             range 0x{lo:08x}..=0x{hi:08x}"
+        );
+    }
+
+    /// SHAPE-only freeze (D-USER-5 (iii)): no other Core Entity
+    /// constant can collide with the reserved slot. v0.12 Core Entity
+    /// allocations are limited to existing UserMarker / ActorMarker /
+    /// SpaceMarker / EntryMarker / ActivityMarker (per §14.6) plus
+    /// the SHAPE-only `RoomMarker` reservation.
+    #[test]
+    fn room_marker_reserved_does_not_collide_with_other_pinned_slots() {
+        let known_entity_slots = [
+            0x0001_0001u32, // UserMarker (§14.6)
+            0x0001_1001u32, // ActorMarker
+            0x0001_2001u32, // SpaceMarker
+            0x0001_3001u32, // EntryMarker
+            0x0001_4001u32, // ActivityMarker
+        ];
+        for s in known_entity_slots {
+            assert_ne!(
+                ROOM_MARKER_RESERVED, s,
+                "ROOM_MARKER_RESERVED collides with §14.6 marker 0x{s:08x}"
+            );
+        }
+    }
+
+    /// Compile-time SHAPE-only confirmation: the reservation does NOT
+    /// collide with any Core Event TypeCode (different sub-range).
+    /// A misalloc that crosses the Entity / Event boundary would
+    /// silently re-use a HookModuleRegister-tier slot.
+    #[test]
+    fn room_marker_reserved_does_not_overlap_core_event_range() {
+        let (lo, hi) = CORE_EVENT;
+        assert!(
+            !(lo..=hi).contains(&ROOM_MARKER_RESERVED),
+            "ROOM_MARKER_RESERVED 0x{ROOM_MARKER_RESERVED:08x} must not enter \
+             CORE_EVENT range"
+        );
+    }
+
+    // ----- Track H.1 (DIP-N3) — forward-looking event TypeCode reservations -----
+
+    /// `ReplicaIdAllocation` lands at the next free Core Event slot
+    /// after `ObserverQuarantine 0x0003_0F0C` (Track A.2.4 / DIP-N2).
+    /// v0.13+ implementers must not collide.
+    #[test]
+    fn replica_id_allocation_typecode_pinned_at_0x0003_0f0d() {
+        assert_eq!(core_event::REPLICA_ID_ALLOCATION, 0x0003_0F0D);
+    }
+
+    /// `AuditReceiptKeyPolicy` follows immediately after
+    /// `ReplicaIdAllocation`. Together the pair reserves a contiguous
+    /// 2-slot block for §14.7 forward-looking events.
+    #[test]
+    fn audit_receipt_key_policy_typecode_pinned_at_0x0003_0f0e() {
+        assert_eq!(core_event::AUDIT_RECEIPT_KEY_POLICY, 0x0003_0F0E);
+    }
+
+    /// Both forward-looking event TypeCodes lie inside the Core Event
+    /// sub-range. Misallocation outside the range would silently break
+    /// the runtime registry's range-based dispatch.
+    #[test]
+    fn forward_looking_event_typecodes_inside_core_event_range() {
+        let (lo, hi) = CORE_EVENT;
+        for slot in [
+            core_event::REPLICA_ID_ALLOCATION,
+            core_event::AUDIT_RECEIPT_KEY_POLICY,
+        ] {
+            assert!(
+                (lo..=hi).contains(&slot),
+                "forward-looking TypeCode 0x{slot:08x} must lie inside \
+                 CORE_EVENT range 0x{lo:08x}..=0x{hi:08x}"
+            );
+        }
+    }
+
+    /// Forward-looking event TypeCodes do NOT collide with any
+    /// previously pinned Core Event slot (`0x0003_0F01..=0x0003_0F0C`).
+    #[test]
+    fn forward_looking_event_typecodes_no_collision_with_existing() {
+        let pinned_existing: &[u32] = &[
+            core_event::RUNTIME_BOOTSTRAP,
+            core_event::USER_ERASURE_SCHEDULED,
+            core_event::USER_ERASURE_COMPLETED,
+            core_event::BACKUP_ERASURE_PROPAGATED,
+            core_event::GDPR_POLICY_VIOLATION,
+            core_event::SIGNATURE_CLASS_POLICY,
+            core_event::CROSS_SHELL_ACTIVITY,
+            core_event::PER_REGION_ERASURE_PROGRESS,
+            core_event::DEK_MIGRATION_COMPLETED,
+            core_event::COMPLIANCE_TIER_CHANGE,
+            core_event::HOOK_MODULE_REGISTER,
+            core_event::OBSERVER_QUARANTINE,
+        ];
+        for new_slot in [
+            core_event::REPLICA_ID_ALLOCATION,
+            core_event::AUDIT_RECEIPT_KEY_POLICY,
+        ] {
+            for old_slot in pinned_existing {
+                assert_ne!(
+                    new_slot, *old_slot,
+                    "forward-looking TypeCode 0x{new_slot:08x} collides \
+                     with previously pinned slot 0x{old_slot:08x}"
+                );
+            }
+        }
+    }
+
+    /// Forward-looking event TypeCodes do NOT collide with the Core
+    /// Entity sub-range (`ROOM_MARKER_RESERVED 0x0001_5001` and the
+    /// §14.6 marker series). Cross-band collision would break the
+    /// Entity/Event sub-range invariant.
+    #[test]
+    fn forward_looking_event_typecodes_no_collision_with_core_entity_range() {
+        let (lo, hi) = CORE_ENTITY;
+        for new_slot in [
+            core_event::REPLICA_ID_ALLOCATION,
+            core_event::AUDIT_RECEIPT_KEY_POLICY,
+        ] {
+            assert!(
+                !(lo..=hi).contains(&new_slot),
+                "forward-looking TypeCode 0x{new_slot:08x} must NOT \
+                 enter CORE_ENTITY range 0x{lo:08x}..=0x{hi:08x}"
+            );
+        }
+    }
+
+    /// The two forward-looking event TypeCodes are themselves distinct
+    /// (no double-allocation within Track H.1).
+    #[test]
+    fn forward_looking_event_typecodes_distinct() {
+        assert_ne!(
+            core_event::REPLICA_ID_ALLOCATION,
+            core_event::AUDIT_RECEIPT_KEY_POLICY,
+            "REPLICA_ID_ALLOCATION and AUDIT_RECEIPT_KEY_POLICY must \
+             be distinct"
+        );
+    }
+}

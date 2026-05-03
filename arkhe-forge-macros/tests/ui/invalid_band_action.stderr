@@ -1,0 +1,5 @@
+error: ArkheAction band must be 1 (Core), 2 (Projection), or 3 (Protocol); got 4
+ --> tests/ui/invalid_band_action.rs:6:12
+  |
+6 | pub struct InvalidBand {
+  |            ^^^^^^^^^^^

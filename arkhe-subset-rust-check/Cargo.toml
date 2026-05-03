@@ -1,0 +1,30 @@
+[package]
+name          = "arkhe-subset-rust-check"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Lint helpers for ArkheForge Runtime: enforces R4-J Subset-Rust purity on Action::compute (clock / RNG / I/O / FFI deny-list). Backs the #[arkhe_pure] attribute macro per E14.L1 (v0.12 도입)."
+keywords      = ["lint", "purity", "determinism", "arkhe", "subset-rust"]
+categories    = ["development-tools", "development-tools::testing"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-subset-rust-check"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+publish       = true
+
+[lib]
+# Sibling-pattern (arkhe-trait-default-check) — regular syn-based lib on
+# stable. The dylint cdylib + driver migration is documented in lib.rs
+# rustdoc as a future-extension goal; running on stable is the deciding
+# factor today (workspace stable-pin + dual-feature gate compatibility).
+crate-type = ["lib"]
+
+[dependencies]
+syn         = { version = "2", features = ["full", "visit"] }
+proc-macro2 = "1"
+quote       = "1"
+
+[lints]
+workspace = true

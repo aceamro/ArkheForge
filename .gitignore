@@ -1,0 +1,29 @@
+target/
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# mdBook build output
+book/book/
+book/book-ko/
+book/book-en/
+runtime-book/book/
+runtime-book/book-ko/
+runtime-book/book-en/
+
+# Repo 경계 외 임시 산출물 (BBS/Casino 등 별도 repo 이동 대상 보관소).
+/tmp/
+
+# Local tooling (editor/agent scratch state).
+.claude/
+
+# Apalache typecheck output (per-run timestamped directory).
+_apalache-out/
+
+# Internal team workflow doc — not for public publish.
+developteamset.md

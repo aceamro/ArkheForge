@@ -1,0 +1,13 @@
+[book]
+title = "ArkheForge Runtime"
+authors = ["aceamro"]
+language = "en"
+src = "src/en"
+description = "Userland atop ArkheKernel — L1/L2 Runtime design spec"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/aceamro/ArkheKernel"
+edit-url-template = "https://github.com/aceamro/ArkheKernel/edit/main/runtime-book/{path}"
+no-section-label = false

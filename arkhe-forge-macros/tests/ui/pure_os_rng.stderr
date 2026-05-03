@@ -1,0 +1,7 @@
+error: E14.L1 R4-J Subset-Rust purity violation: `rand::rngs::OsRng` (rng). see arkhe-subset-rust-check policy.
+  --> tests/ui/pure_os_rng.rs:15:1
+   |
+15 | #[arkhe_pure]
+   | ^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `arkhe_pure` (in Nightly builds, run with -Z macro-backtrace for more info)

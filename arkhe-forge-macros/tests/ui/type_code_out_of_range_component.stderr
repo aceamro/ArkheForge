@@ -1,0 +1,5 @@
+error: ArkheComponent type_code 0x00010001 out of range; core: 0x00030000..=0x00030EFF, shell-scoped: 0x01000000..=0xEFFFFFFF
+ --> tests/ui/type_code_out_of_range_component.rs:6:12
+  |
+6 | pub struct OutOfRangeComponent {
+  |            ^^^^^^^^^^^^^^^^^^^

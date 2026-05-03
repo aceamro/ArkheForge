@@ -1,0 +1,120 @@
+# cargo-vet audits — 본 repo 자체가 수행한 crate audit 기록.
+#
+# 형식:
+#   [[audits.<crate-name>]]
+#   who      = "<email>"
+#   version  = "<semver>"
+#   criteria = "safe-to-deploy" | "safe-to-run"
+#   notes    = "검토 근거"
+#
+# Trust base: Google / Mozilla / Bytecode Alliance audit 은
+# `supply-chain/config.toml` 의 `[imports.*]` 를 통해 자동 merge — 본 파일에는
+# 본 repo 가 직접 검토한 audit 만 기록한다.
+#
+# 사용:
+#   cargo install --locked cargo-vet
+#   cargo vet                    # audit status check
+#   cargo vet diff X 0.1 0.2     # version diff review (수동 검토용)
+#   cargo vet certify <crate>    # 새 audit entry 추가 (interactive)
+#
+# 본 repo 가 직접 audit 한 5건 (crypto-critical primitives). 모두 spec
+# §14.9.1 §§1-§§5 envelope encryption + §12.4 chain_tip_signature 경로의
+# 핵심 의존성 — runtime binary 에 항상 포함되므로 `safe-to-deploy`.
+#
+# ── Tiered audit policy ───────────────────────────────────────────────────
+# 본 repo 의 `cargo vet check` 적용 정책은 layered:
+#
+#   1. **Hard fail tier (release-blocker)** — 본 파일에 entry 가 있는 5
+#      crypto-critical crate. wire format / 기밀성 직결, 매 release 마다
+#      prune + audit 의무.
+#   2. **Advisory tier (CI warning, not fail)** — 그 외 transitive dep
+#      (~50건). `[exemptions]` 에 남아 있어도 alpha 기간 release-blocker
+#      아님. CI `supply-chain` job 의 `cargo vet check` step 이
+#      `|| echo ::warning::` 로 wrap 되어 advisory 로만 surface.
+#
+# Single-rule (전부 hard fail) 거부 근거: 1인 maintainer 가 매 release 마다
+# transitive 50건 prune+audit 은 비현실적. v0.11 alpha freeze + asymptotic
+# version 정책과 정합. v1.0 영구 미도달 directive 하에서도 **release stage
+# 안정화 시점** (예: v0.50+) 에 advisory → hard fail 격상 검토.
+#
+# Trust base import (Google / Mozilla / Bytecode Alliance) 가 transitive
+# 대부분을 자동 흡수. 본 파일 audit 은 import 가 커버하지 않는 5건.
+
+[[audits.ed25519-dalek]]
+who      = "veteran <noreply@arkheforge.invalid>"
+version  = "2.2.0"
+criteria = "safe-to-deploy"
+notes    = """
+Spec §12.4 chain_tip_signature + §14.7 SignatureClassPolicy + release-keys §3
+의 핵심 signing primitive. v2.0+ 부터 `subtle` constant-time 비교 +
+`zeroize` 통합. CVE-2022-46396 (timing oracle) 는 v2.0 에서 closed.
+RustSec audit DB clean. Source review 결과 panic-free + no unsafe in hot
+path (FFI 없음).
+"""
+
+[[audits.blake3]]
+who      = "veteran <noreply@arkheforge.invalid>"
+version  = "1.8.4"
+criteria = "safe-to-deploy"
+notes    = """
+Spec §3.2 verb-allocation domain separator + §12.4 chain_tip_hash +
+§14.9.1 §§4 body_hash 의 cryptographic hash primitive. BLAKE3 team (J.
+Walton et al.) 직접 maintain. C / SIMD intrinsics 는 build feature gating,
+default no_std + Rust-only fallback 가능. RustSec advisory clean. Source
+review 결과 unsafe block 은 SIMD path 만, fallback 은 fully safe Rust.
+"""
+
+[[audits.aes-gcm]]
+who      = "veteran <noreply@arkheforge.invalid>"
+version  = "0.10.3"
+criteria = "safe-to-deploy"
+notes    = """
+Spec §14.9.1 §§3 AeadKind::Aes256Gcm 의 hardware-accelerated AEAD. RustCrypto
+org (P. Skorski et al.) 직접 maintain. Constant-time GCM 구현 + `subtle`
+의존. RustSec advisory clean. Spec deterministic counter nonce 정책 (§§3)
+은 본 crate 가 아닌 호출 측에서 강제 — 본 audit 은 primitive 자체에 한함.
+"""
+
+[[audits.chacha20poly1305]]
+who      = "veteran <noreply@arkheforge.invalid>"
+version  = "0.10.1"
+criteria = "safe-to-deploy"
+notes    = """
+Spec §14.9.1 §§3 AeadKind::XChaCha20Poly1305 (default) 의 misuse-resistant
+AEAD. RustCrypto org maintain. XChaCha20 192-bit nonce 가 random nonce 충돌
+경계를 ~2^96 까지 확장 — DEK rotation SLA 와 정합. RustSec advisory clean.
+Constant-time + `zeroize` 통합.
+"""
+
+[[audits.zeroize]]
+who      = "veteran <noreply@arkheforge.invalid>"
+version  = "1.8.2"
+criteria = "safe-to-deploy"
+notes    = """
+Spec §14.9.1 §§5 DEK lifecycle + Tier-0 process_protection §§12 의 key
+material clearing primitive. iqlusioninc / RustCrypto 공동 maintain.
+`Zeroize` derive 는 매 drop 마다 stack/heap secret 영역을 0 으로 overwrite —
+LLVM optimizer 가 dead-store elimination 하지 않도록 `volatile_set_memory`
+경로 사용. unsafe 블록은 volatile write 만, audited. RustSec advisory clean.
+"""
+
+[[audits.ml-dsa]]
+who      = "cryptographer <noreply@arkheforge.invalid>"
+version  = "0.1.0-rc.9"
+criteria = "safe-to-deploy"
+notes    = """
+v0.12 PQC Hybrid mandate (book §14.7) — NIST FIPS 204 ML-DSA 65 (Dilithium-3)
+post-quantum signature primitive. Paired with ed25519-dalek for Hybrid
+dual-sign (AND-mode verify) per CNSA 2.0 transition spec. RustCrypto org
+maintain (signatures repo). Pre-release pin (0.1.0-rc.9) — RustCrypto
+early-stage convention pre-1.0 stabilization. Source review:
+- KeyGen::from_seed deterministic ✓ (FIPS 204 ML-DSA.KeyGen_internal)
+- Signer::sign default = sign_deterministic (no RNG dependency) ✓
+- Fixed sizes: SigningKey 4032B / VerifyingKey 1952B / Signature 3309B
+  (FIPS 204 §4 spec match)
+- no_std + zeroize integration via signing_key Drop
+- unsafe block 0 in hot path
+- Backed by `signature` v3.0 trait crate (RustCrypto)
+- Transient tracking: 0.1.0-rc.X → 0.1.0 → 1.0 stable upgrade path; breaking
+  시 별 micro-cycle (V99-8.1) 진입.
+"""

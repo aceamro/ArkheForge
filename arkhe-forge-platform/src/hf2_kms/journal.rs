@@ -1,0 +1,421 @@
+//! `runtime_doctor_journal` chain-signed persistence (spec §12.4, §14.11.2
+//! HF2 audit-log tamper-resistance).
+//!
+//! Each [`JournalEntry`] links to its predecessor through a BLAKE3 chain
+//! hash and carries an Ed25519 signature over that hash; readers verify the
+//! whole log with [`PersistentJournal::verify_chain`] — a single tamper
+//! surfaces as [`JournalError::ChainIntegrity`] or
+//! [`JournalError::SignatureInvalid`].
+//!
+//! # Layering
+//!
+//! - [`ConsumedToken`] — the audit payload (Shamir token identifier,
+//!   consuming operator fingerprint, tick).
+//! - [`JournalEntry`] — `ConsumedToken` + `prev_hash` + `entry_hash` +
+//!   `signature`. Entry hash is a BLAKE3 keyed hash over `prev_hash || token
+//!   canonical bytes` under the `arkhe-runtime-doctor-journal-chain` domain.
+//! - [`JournalSigner`] — signing trait; the real HW-key-backed signer
+//!   (YubiKey / NitroKey per `docs/release-keys.md` §3) lives outside this
+//!   module. [`InMemoryJournalSigner`] ships only for dev / unit tests.
+//! - [`PersistentJournal`] — pluggable backend trait. [`InMemoryJournal`]
+//!   is the dev impl; a future release wires [`WalBackedJournal`] against
+//!   `arkhe-kernel` WAL.
+//!
+//! # `KmsBackend` 연계
+//!
+//! Journal append 경로는 `KmsBackend` 내부가 아니라 **상위 coordinator**
+//! (e.g. auto_promote evaluator, crypto-erasure coordinator) 에서 호출되는
+//! 구조로 설계되었다. Sync trait 유지 + `AwsKmsBackend` 의
+//! `tokio::block_on` bridge 재진입 회피. 자세한 wiring 은 `kms_backend.rs`
+//! 계승.
+//!
+//! # Signer 주입
+//!
+//! Runtime process 는 private Ed25519 key material 을 **직접 보유하지
+//! 않는다** — `docs/release-keys.md` §3 의 2인 공동 보관 HW key 로부터
+//! `JournalSigner` trait object 를 주입받는다. Production signer
+//! (`YubiKeyJournalSigner`) 는 향후 릴리스에서 구현 — 현재는
+//! `InMemoryJournalSigner` 가 dev 경로만 커버한다.
+
+use blake3::derive_key;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+
+/// BLAKE3 domain separator for journal chain hashing. Registered in spec
+/// `Runtime BLAKE3 domain string list` (§14.7 m4 canonical / §3.2 mirror);
+/// `runtime_doctor_journal` chain hash cross-ref in §12.4.
+pub const JOURNAL_CHAIN_DOMAIN: &str = "arkhe-runtime-doctor-journal-chain";
+
+/// Genesis `prev_hash` — 첫 entry 는 zero prev_hash 를 가진다.
+pub const GENESIS_PREV_HASH: [u8; 32] = [0u8; 32];
+
+/// Consumed Shamir authorization token — the audit payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedToken {
+    /// Token identifier (BLAKE3 hash of share set, 32 byte).
+    pub token_hash: [u8; 32],
+    /// Consuming operator fingerprint (Ed25519 pubkey first 8 byte).
+    pub operator_fingerprint: [u8; 8],
+    /// Consumed at tick.
+    pub consumed_at_tick: u64,
+}
+
+impl ConsumedToken {
+    /// Canonical byte encoding — field order + lengths are pinned so chain
+    /// hashes stay stable across releases.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32 + 8 + 8);
+        buf.extend_from_slice(&self.token_hash);
+        buf.extend_from_slice(&self.operator_fingerprint);
+        buf.extend_from_slice(&self.consumed_at_tick.to_be_bytes());
+        buf
+    }
+}
+
+/// Chain-signed journal entry.
+#[derive(Debug, Clone)]
+pub struct JournalEntry {
+    /// Audit payload.
+    pub token: ConsumedToken,
+    /// Previous entry's `entry_hash` (or [`GENESIS_PREV_HASH`] for the first
+    /// entry).
+    pub prev_hash: [u8; 32],
+    /// `BLAKE3-derive_key(JOURNAL_CHAIN_DOMAIN, prev_hash || token_canonical_bytes)`.
+    pub entry_hash: [u8; 32],
+    /// `Ed25519 sign(entry_hash)`.
+    pub signature: [u8; 64],
+    /// Signer's Ed25519 public key.
+    pub signer_pubkey: [u8; 32],
+}
+
+impl JournalEntry {
+    /// Re-compute `entry_hash` from `prev_hash` + `token` canonical bytes.
+    pub fn compute_entry_hash(prev_hash: &[u8; 32], token: &ConsumedToken) -> [u8; 32] {
+        let mut payload = Vec::with_capacity(32 + 48);
+        payload.extend_from_slice(prev_hash);
+        payload.extend_from_slice(&token.canonical_bytes());
+        derive_key(JOURNAL_CHAIN_DOMAIN, &payload)
+    }
+}
+
+/// Signing abstraction — the real HW-key signer (YubiKey / NitroKey) lives
+/// behind this trait so the journal never touches raw `SigningKey` material.
+///
+/// `Send + Sync` are required so `&dyn JournalSigner` survives future L2
+/// multi-consumer transport (audit replicator / transparency-log publisher)
+/// even though the current single-active L2 path only crosses threads via
+/// the observer pool. Impls are expected to be cheap to share — an
+/// `Arc<SigningKey>` wrapper or HW-backed handle.
+pub trait JournalSigner: Send + Sync {
+    /// Sign `message` and return the 64-byte Ed25519 signature.
+    fn sign(&self, message: &[u8]) -> [u8; 64];
+    /// Signer's Ed25519 public key (32 byte) — embedded in each entry for
+    /// independent verification.
+    fn public_key(&self) -> [u8; 32];
+}
+
+/// Dev-only signer backed by an in-process `SigningKey`. **Production**:
+/// replace with a HW-backed signer (e.g. `YubiKeyJournalSigner`) so private
+/// key material never enters the process address space (spec release-keys
+/// §3 / §14.11.3).
+pub struct InMemoryJournalSigner {
+    key: SigningKey,
+}
+
+impl InMemoryJournalSigner {
+    /// Wrap an in-process `SigningKey`. Callers must ensure the key material
+    /// stays inside the [`process_protection`](super::super::process_protection)
+    /// boundary (Tier-0 software-kek) or is supplied exclusively via test
+    /// fixtures.
+    pub fn new(key: SigningKey) -> Self {
+        Self { key }
+    }
+
+    /// Verify handle — exposed mostly so tests can assert signature
+    /// validity without reaching into the crate internals.
+    pub fn verifying_key(&self) -> VerifyingKey {
+        self.key.verifying_key()
+    }
+}
+
+impl JournalSigner for InMemoryJournalSigner {
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        let sig: Signature = self.key.sign(message);
+        sig.to_bytes()
+    }
+
+    fn public_key(&self) -> [u8; 32] {
+        self.key.verifying_key().to_bytes()
+    }
+}
+
+/// Journal operation error.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum JournalError {
+    /// 동일 token 재사용 탐지 — replay attack.
+    #[error("duplicate token consume attempt")]
+    DuplicateToken,
+    /// Chain hash 재계산 결과 불일치 — tamper detected.
+    #[error("journal chain integrity violation at entry {index}")]
+    ChainIntegrity {
+        /// 0-based index of the first failing entry.
+        index: usize,
+    },
+    /// Ed25519 signature 검증 실패.
+    #[error("journal signature invalid at entry {index}")]
+    SignatureInvalid {
+        /// 0-based index of the first failing entry.
+        index: usize,
+    },
+    /// Backend I/O 오류 — WAL-backed 경로가 future 에서 사용.
+    #[error("journal backend error: {0}")]
+    BackendIo(String),
+}
+
+/// Append-only chain-signed journal — pluggable backend.
+pub trait PersistentJournal {
+    /// Append a consumed token. Duplicate `token_hash` is rejected with
+    /// [`JournalError::DuplicateToken`]. Success returns the newly-created
+    /// entry so the caller can verify / publish it.
+    fn append(
+        &mut self,
+        token: ConsumedToken,
+        signer: &dyn JournalSigner,
+    ) -> Result<JournalEntry, JournalError>;
+
+    /// Full chain integrity + signature verification. Returns `Ok(())` if
+    /// every entry's `entry_hash` matches its re-computation **and** every
+    /// signature validates under `signer_pubkey`; otherwise surfaces the
+    /// first failing index.
+    fn verify_chain(&self) -> Result<(), JournalError>;
+
+    /// Last entry's `entry_hash`, or [`GENESIS_PREV_HASH`] for an empty
+    /// journal. Useful for external publishing (transparency log).
+    fn tip_hash(&self) -> [u8; 32];
+
+    /// Count entries.
+    fn len(&self) -> usize;
+
+    /// Empty journal check.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Duplicate check — O(n) linear scan on in-memory, backend-specific on
+    /// WAL-backed.
+    fn is_duplicate(&self, token_hash: &[u8; 32]) -> bool;
+}
+
+/// Marker trait for WAL-backed journal impls — the real `arkhe-kernel`
+/// WAL integration lands in a future release. Tier-1 operators use
+/// [`InMemoryJournal`] only for dev / single-node alpha.
+pub trait WalBackedJournal: PersistentJournal {
+    // Placeholder — future release adds `persist_to_wal(...)` +
+    // `reconstruct_from_wal(...)` surface when L0 WAL exposes the hook.
+}
+
+/// Dev-only in-memory chain-signed journal.
+#[derive(Debug, Default)]
+pub struct InMemoryJournal {
+    entries: Vec<JournalEntry>,
+}
+
+impl InMemoryJournal {
+    /// Empty journal.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Borrow the full entry list — read-only view for transparency-log
+    /// publishers.
+    pub fn entries(&self) -> &[JournalEntry] {
+        &self.entries
+    }
+}
+
+impl PersistentJournal for InMemoryJournal {
+    fn append(
+        &mut self,
+        token: ConsumedToken,
+        signer: &dyn JournalSigner,
+    ) -> Result<JournalEntry, JournalError> {
+        if self.is_duplicate(&token.token_hash) {
+            return Err(JournalError::DuplicateToken);
+        }
+        let prev_hash = self.tip_hash();
+        let entry_hash = JournalEntry::compute_entry_hash(&prev_hash, &token);
+        let signature = signer.sign(&entry_hash);
+        let entry = JournalEntry {
+            token,
+            prev_hash,
+            entry_hash,
+            signature,
+            signer_pubkey: signer.public_key(),
+        };
+        self.entries.push(entry.clone());
+        Ok(entry)
+    }
+
+    fn verify_chain(&self) -> Result<(), JournalError> {
+        let mut expected_prev = GENESIS_PREV_HASH;
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if entry.prev_hash != expected_prev {
+                return Err(JournalError::ChainIntegrity { index: idx });
+            }
+            let recomputed = JournalEntry::compute_entry_hash(&entry.prev_hash, &entry.token);
+            if recomputed != entry.entry_hash {
+                return Err(JournalError::ChainIntegrity { index: idx });
+            }
+            let verifying_key = VerifyingKey::from_bytes(&entry.signer_pubkey)
+                .map_err(|_| JournalError::SignatureInvalid { index: idx })?;
+            let sig = Signature::from_bytes(&entry.signature);
+            verifying_key
+                .verify(&entry.entry_hash, &sig)
+                .map_err(|_| JournalError::SignatureInvalid { index: idx })?;
+            expected_prev = entry.entry_hash;
+        }
+        Ok(())
+    }
+
+    fn tip_hash(&self) -> [u8; 32] {
+        self.entries
+            .last()
+            .map(|e| e.entry_hash)
+            .unwrap_or(GENESIS_PREV_HASH)
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn is_duplicate(&self, token_hash: &[u8; 32]) -> bool {
+        self.entries
+            .iter()
+            .any(|e| &e.token.token_hash == token_hash)
+    }
+}
+
+/// Backward-compatible alias — other modules (e.g. `threshold.rs`
+/// module-doc) 가 여전히 이 이름을 참조한다.
+pub type ConsumedTokenJournal = InMemoryJournal;
+
+#[cfg(test)]
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn test_signer(seed: u8) -> InMemoryJournalSigner {
+        let secret = [seed; 32];
+        InMemoryJournalSigner::new(SigningKey::from_bytes(&secret))
+    }
+
+    fn make_token(tag: u8, tick: u64) -> ConsumedToken {
+        ConsumedToken {
+            token_hash: [tag; 32],
+            operator_fingerprint: [tag; 8],
+            consumed_at_tick: tick,
+        }
+    }
+
+    #[test]
+    fn journal_initial_empty_and_genesis_tip() {
+        let j = InMemoryJournal::new();
+        assert!(j.is_empty());
+        assert_eq!(j.len(), 0);
+        assert_eq!(j.tip_hash(), GENESIS_PREV_HASH);
+    }
+
+    #[test]
+    fn append_produces_chained_entry() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x01);
+        let entry = j.append(make_token(0x11, 100), &signer).unwrap();
+        assert_eq!(entry.prev_hash, GENESIS_PREV_HASH);
+        assert_eq!(j.tip_hash(), entry.entry_hash);
+        assert_eq!(j.len(), 1);
+    }
+
+    #[test]
+    fn second_entry_chains_to_first() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x02);
+        let first = j.append(make_token(0x11, 1), &signer).unwrap();
+        let second = j.append(make_token(0x22, 2), &signer).unwrap();
+        assert_eq!(second.prev_hash, first.entry_hash);
+    }
+
+    #[test]
+    fn duplicate_token_rejected() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x03);
+        let token = make_token(0x42, 200);
+        assert!(j.append(token.clone(), &signer).is_ok());
+        assert_eq!(
+            j.append(token, &signer).unwrap_err(),
+            JournalError::DuplicateToken
+        );
+        assert_eq!(j.len(), 1);
+    }
+
+    #[test]
+    fn verify_chain_accepts_clean_log() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x04);
+        j.append(make_token(0x01, 10), &signer).unwrap();
+        j.append(make_token(0x02, 20), &signer).unwrap();
+        j.append(make_token(0x03, 30), &signer).unwrap();
+        assert!(j.verify_chain().is_ok());
+    }
+
+    #[test]
+    fn verify_chain_detects_tampered_hash() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x05);
+        j.append(make_token(0x01, 10), &signer).unwrap();
+        j.append(make_token(0x02, 20), &signer).unwrap();
+        // Tamper: flip one byte of the second entry's token tick.
+        j.entries[1].token.consumed_at_tick = 99;
+        match j.verify_chain() {
+            Err(JournalError::ChainIntegrity { index: 1 }) => {}
+            other => panic!("expected ChainIntegrity {{ index: 1 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_chain_detects_tampered_signature() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x06);
+        j.append(make_token(0x01, 10), &signer).unwrap();
+        // Flip a signature byte.
+        j.entries[0].signature[0] ^= 0xFF;
+        match j.verify_chain() {
+            Err(JournalError::SignatureInvalid { index: 0 }) => {}
+            other => panic!("expected SignatureInvalid {{ index: 0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_duplicate_query_matches_append_rejection() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x07);
+        let hash = [0x55u8; 32];
+        assert!(!j.is_duplicate(&hash));
+        j.append(
+            ConsumedToken {
+                token_hash: hash,
+                operator_fingerprint: [0u8; 8],
+                consumed_at_tick: 1,
+            },
+            &signer,
+        )
+        .unwrap();
+        assert!(j.is_duplicate(&hash));
+    }
+
+    #[test]
+    fn backward_alias_still_usable() {
+        // `ConsumedTokenJournal` alias keeps threshold.rs module-doc live.
+        let j: ConsumedTokenJournal = InMemoryJournal::new();
+        assert_eq!(j.len(), 0);
+    }
+}

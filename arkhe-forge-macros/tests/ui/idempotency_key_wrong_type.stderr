@@ -1,0 +1,5 @@
+error: `idempotency_key` field must have the exact type `Option<[u8; 16]>`
+ --> tests/ui/idempotency_key_wrong_type.rs:8:26
+  |
+8 |     pub idempotency_key: String,
+  |                          ^^^^^^

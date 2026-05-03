@@ -1,0 +1,22 @@
+[package]
+name          = "arkhe-runtime-testkit"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Property-based testing harness for ArkheForge Runtime: proptest Arbitrary implementations + scope-based shrinker for ShellId / TypeCode / Tick / EntityId."
+keywords      = ["testing", "proptest", "property-based", "runtime", "arkhe"]
+categories    = ["development-tools::testing"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-runtime-testkit"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[dependencies]
+arkhe-kernel = { path = "../../ArkheKernel/arkhe-kernel", version = "0.13" }
+arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.13" }
+proptest            = { workspace = true }
+
+[lints]
+workspace = true

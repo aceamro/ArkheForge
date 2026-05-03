@@ -1,0 +1,78 @@
+[package]
+name          = "arkhe-forge-core"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "L1 primitives for ArkheForge Runtime: Core 5 (User / Actor / Space / Entry / Activity) + ShellBrand invariant-lifetime isolation + deterministic entity-id derivation. Pure compute, no I/O."
+keywords      = ["runtime", "primitives", "activitypub", "ecs", "arkhe"]
+categories    = ["data-structures"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-forge-core"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[dependencies]
+arkhe-kernel = { path = "../../ArkheKernel/arkhe-kernel", version = "0.13" }
+arkhe-macros        = { path = "../../ArkheKernel/arkhe-macros", version = "0.13" }
+arkhe-forge-macros  = { path = "../arkhe-forge-macros", version = "0.13" }
+serde               = { workspace = true }
+postcard            = { workspace = true }
+blake3              = { workspace = true }
+bytes               = { workspace = true }
+arrayvec            = { workspace = true }
+thiserror           = { workspace = true }
+zeroize             = { workspace = true }
+
+# Track H (DIP-N3) — §14.7 forward-looking events. v0.12 cut reserves
+# the wire surface (TypeCode + struct definitions) but keeps the type
+# definitions behind these activation-condition feature flags so default
+# builds do not even compile the types. Activation gates (operator-side
+# prerequisites — see `docs/release-keys.md` + `runtime-book/src/en/
+# architecture/14-open-questions.md` §14.7).
+#
+# DIP-N4 N4.4 — emission sub-feature DEFER (auditor + cryptographer
+# convergent decision, decision-doc only, no implementation):
+#
+# v0.12 cut intentionally omits per-feature emission sub-feature
+# gates (e.g., `federation-archive-hardened-emission` /
+# `audit-receipt-key-identified-emission`). At v0.12, no production
+# emission code exists for `ReplicaIdAllocation` or
+# `AuditReceiptKeyPolicy` (Track H.3 mechanical proof — workspace
+# scan confirms zero emit_event::<…> sites in production paths).
+# Adding sub-feature flags with no code to gate is YAGNI (Linus
+# "don't add features without users"); the scaffold and the code
+# travel together.
+#
+# DECISION CONTRACT: the future emission DIP (post-v0.13 sealing,
+# indefinite-future timing — operator activation prerequisites must
+# resolve first) MUST also add the corresponding `*-emission` sub-
+# feature flags concurrently with the emission code. Activation gate
+# = explicit operator opt-in. This contract is self-enforcing: no
+# emission code can land without the sub-feature scaffold landing in
+# the same DIP cycle. Recorded here so the future DIP authors and
+# reviewers find this constraint at the point where they would need
+# to reason about it.
+[features]
+default = []
+# Activation: archive-hardening complete (`docs/release-keys.md` §3 +
+# operator carry-overs e/f/g/h). Enables `ReplicaIdAllocation` event
+# type (`0x0003_0F0D`). Production emission still requires the post-
+# v0.13 sealing future emission DIP (per DIP-N4 N4.4 contract above);
+# this feature only opens the type surface for forward-compat
+# tooling / verification.
+federation-archive-hardened = []
+# Activation: audit-receipt key identity declared in
+# `docs/release-keys.md §1` inventory (cryptographer V4 (g) gate).
+# Enables `AuditReceiptKeyPolicy` event type (`0x0003_0F0E`).
+# Production emission requires the post-v0.13 sealing future
+# emission DIP (per DIP-N4 N4.4 contract above).
+audit-receipt-key-identified = []
+
+[dev-dependencies]
+proptest             = { workspace = true }
+arkhe-runtime-testkit = { path = "../arkhe-runtime-testkit", version = "0.13" }
+
+[lints]
+workspace = true

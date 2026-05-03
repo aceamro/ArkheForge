@@ -1,0 +1,32 @@
+[package]
+name          = "arkhe-forge"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "ArkheForge Runtime umbrella crate: re-exports arkhe-forge-core (L1 primitives) + arkhe-forge-platform (L2 services). Shell authors depend on this crate only; compliance-tier features proxy through to the platform crate."
+keywords      = ["runtime", "arkhe", "activitypub", "ecs", "deterministic"]
+categories    = ["data-structures", "database"]
+repository    = "https://github.com/aceamro/ArkheKernel"
+homepage      = "https://github.com/aceamro/ArkheKernel"
+documentation = "https://docs.rs/arkhe-forge"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[dependencies]
+arkhe-forge-core     = { path = "../arkhe-forge-core",     version = "0.13" }
+arkhe-forge-platform = { path = "../arkhe-forge-platform", version = "0.13" }
+
+[features]
+# Umbrella 가 platform feature 를 shell 에 proxy.
+default          = []
+tier-1-kms       = ["arkhe-forge-platform/tier-1-kms"]
+tier-2-multi-kms = ["arkhe-forge-platform/tier-2-multi-kms"]
+tier-2-aws-kms   = ["arkhe-forge-platform/tier-2-aws-kms"]
+tier-2-hook-host-v2 = ["arkhe-forge-platform/tier-2-hook-host-v2"]
+tier-2-observer-host-v2 = ["arkhe-forge-platform/tier-2-observer-host-v2"]
+pqc-hybrid       = ["arkhe-forge-platform/pqc-hybrid"]
+unstable         = ["arkhe-forge-platform/unstable"]
+
+[lints]
+workspace = true

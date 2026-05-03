@@ -1,0 +1,50 @@
+# arkhe-runtime-proofs — ArkheKernel Runtime Kani harness crate.
+#
+# DIP-N5 cycle plan Track E sub-step E.2 (scaffold) + E.8 (4-property
+# suite). Implementation-level proof crate for the L1 Action submit/
+# dispatch/replay path.
+#
+# **Standalone workspace — NOT a member of the root ArkheKernel
+# workspace** (cycle plan v0.4 D-USER-3 (c) Q4(a) absorption, Linus
+# single-path). The empty `[workspace]` table below makes this crate
+# its own workspace, opting out of the parent ArkheKernel workspace's
+# auto-discovery (per Cargo book §3.5 sub-crate exclusion idiom).
+#
+# `cargo build --workspace` and `cargo test --workspace` from the
+# ArkheKernel root do not see this crate (they exit successfully
+# without compiling it). `cargo kani` is invoked from inside this
+# directory only, with the Kani-bundled Rust toolchain (nightly per
+# `rust-toolchain.toml`).
+#
+# E.8 expands this scaffold to the 4-property Kani harness suite:
+# `kani_authorize_property` / `kani_dispatch_property` /
+# `kani_replay_property` / `kani_memory_bounds_check_property`.
+#
+# E.8 fix: empty `[workspace]` table added (was missing in E.2
+# scaffold — `cargo build` from this dir failed with workspace
+# ambiguity error pre-fix). Required for `cargo kani` CI job to
+# function correctly.
+
+# Empty [workspace] table makes this crate a standalone workspace,
+# independent of the parent ArkheKernel workspace at /Cargo.toml.
+[workspace]
+
+[package]
+name        = "arkhe-runtime-proofs"
+version     = "0.13.0"
+edition     = "2021"
+description = "ArkheKernel Runtime Kani harness crate — v0.12 sealing cycle Track E"
+license     = "Apache-2.0 OR MIT"
+publish     = false
+rust-version = "1.80"
+
+[lib]
+name = "arkhe_runtime_proofs"
+path = "src/lib.rs"
+
+# `cfg(kani)` is set by the Kani toolchain at `cargo kani` invocation,
+# not by standard rustc. Declare it as a recognized cfg to silence
+# stable-toolchain `unexpected_cfgs` warnings (per Cargo book §future-
+# incompat / Kani 0.67.0 stable-rustc compatibility).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
