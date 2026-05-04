@@ -1,0 +1,8 @@
+# Test Count Baselines — `cargo test --workspace` per feature config (forge scope)
+#
+# ArkheForge workspace (8 crates: arkhe-forge-{core,macros,platform} + arkhe-forge +
+# arkhe-runtime-testkit + arkhe-{trait-default,subset-rust}-check + examples/card-primitives).
+# Format: `<config-name>=<count>` — KEY=VALUE per line.
+
+default=454
+all-features=617

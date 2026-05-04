@@ -1,0 +1,50 @@
+[package]
+name          = "arkhe-forge-core"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "L1 primitives for ArkheForge Runtime: Core 5 (User / Actor / Space / Entry / Activity) + ShellBrand invariant-lifetime isolation + deterministic entity-id derivation. Pure compute, no I/O."
+keywords      = ["runtime", "primitives", "activitypub", "ecs", "arkhe"]
+categories    = ["data-structures"]
+repository    = "https://github.com/aceamro/ArkheForge"
+homepage      = "https://github.com/aceamro/ArkheForge"
+documentation = "https://docs.rs/arkhe-forge-core"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[dependencies]
+arkhe-kernel        = "0.13"
+arkhe-macros        = "0.13"
+arkhe-forge-macros  = { path = "../arkhe-forge-macros", version = "0.13" }
+serde               = { workspace = true }
+postcard            = { workspace = true }
+blake3              = { workspace = true }
+bytes               = { workspace = true }
+arrayvec            = { workspace = true }
+thiserror           = { workspace = true }
+zeroize             = { workspace = true }
+
+# §14.7 forward-looking event activation flags. The wire surface
+# (TypeCode + struct definitions) for `ReplicaIdAllocation` +
+# `AuditReceiptKeyPolicy` is reserved here but kept behind these
+# activation-condition feature flags so default builds do not even
+# compile the types. Activation gates (operator-side prerequisites)
+# are documented in `docs/release-keys.md`.
+[features]
+default = []
+# Activation: archive-hardening complete (`docs/release-keys.md` §3
+# + operator carry-overs e/f/g/h). Enables `ReplicaIdAllocation`
+# event type (`0x0003_0F0D`).
+federation-archive-hardened = []
+# Activation: audit-receipt key identity declared in
+# `docs/release-keys.md §1` inventory (cryptographer V4 (g) gate).
+# Enables `AuditReceiptKeyPolicy` event type (`0x0003_0F0E`).
+audit-receipt-key-identified = []
+
+[dev-dependencies]
+proptest             = { workspace = true }
+arkhe-runtime-testkit = { path = "../arkhe-runtime-testkit", version = "0.13" }
+
+[lints]
+workspace = true

@@ -1,0 +1,38 @@
+# arkhe-runtime-proofs — ArkheForge Runtime Kani harness crate.
+# Implementation-level proof crate for the L1 Action submit / dispatch
+# / replay path. Ships a 4-property Kani harness suite:
+# `kani_authorize_property` / `kani_dispatch_property` /
+# `kani_replay_property` / `kani_memory_bounds_check_property`.
+#
+# **Standalone workspace** — Linus single-path: the empty `[workspace]`
+# table below makes this crate its own workspace, opting out of the
+# parent ArkheForge workspace's auto-discovery (per Cargo book §3.5
+# sub-crate exclusion idiom). `cargo build --workspace` and
+# `cargo test --workspace` from the ArkheForge root do not see this
+# crate (they exit successfully without compiling it). `cargo kani`
+# is invoked from inside this directory only, with the Kani-bundled
+# Rust toolchain (nightly per `rust-toolchain.toml`).
+
+# Empty [workspace] table makes this crate a standalone workspace,
+# independent of the parent ArkheForge workspace at /Cargo.toml.
+[workspace]
+
+[package]
+name        = "arkhe-runtime-proofs"
+version     = "0.13.0"
+edition     = "2021"
+description = "ArkheForge Runtime Kani harness crate"
+license     = "Apache-2.0 OR MIT"
+publish     = false
+rust-version = "1.80"
+
+[lib]
+name = "arkhe_runtime_proofs"
+path = "src/lib.rs"
+
+# `cfg(kani)` is set by the Kani toolchain at `cargo kani` invocation,
+# not by standard rustc. Declare it as a recognized cfg to silence
+# stable-toolchain `unexpected_cfgs` warnings (per Cargo book §future-
+# incompat / Kani 0.67.0 stable-rustc compatibility).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

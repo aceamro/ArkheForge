@@ -1,0 +1,42 @@
+[package]
+name          = "card-primitives"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Hold'em card primitives example — packed `Card` byte form, cursor-based `Deck` with Fisher-Yates shuffle, 9-category `HandRank` evaluator, BLAKE3 commit-reveal verifier, ArkheForge L1 Action/Event integration."
+repository    = "https://github.com/aceamro/ArkheForge"
+homepage      = "https://github.com/aceamro/ArkheForge"
+license       = "MIT OR Apache-2.0"
+authors       = ["Arkhe Contributors"]
+publish       = false
+
+# Crypto/serde/RNG primitives — all workspace-pinned, no new crates.io deps.
+[dependencies]
+serde             = { workspace = true }
+postcard          = { workspace = true }
+static_assertions = { workspace = true }
+rand_core         = { workspace = true }
+blake3            = { workspace = true }
+zeroize           = { workspace = true }
+
+# ArkheForge L1 integration. The `#[derive(ArkheAction)]` /
+# `#[derive(ArkheEvent)]` macros emit absolute paths
+# `::arkhe_forge_core::__sealed::__Sealed` etc., so the core crate must
+# be a top-level dep. Path dep matches the workspace pattern shared by
+# `arkhe-forge` / `arkhe-forge-platform` (see workspace `[workspace]`
+# members list).
+arkhe-forge-core  = { path = "../../arkhe-forge-core", version = "0.13" }
+# Kernel ABI types (`Principal`, `Tick`, `InstanceId`, `CapabilityMask`)
+# consumed by `ActionContext::new`. Re-uses the existing
+# `[workspace.dependencies] arkhe-kernel = "0.13"` pin — no new
+# crates.io entry.
+arkhe-kernel      = { workspace = true }
+# ArkheForge L2 integration. The `RuntimeService` dispatcher wraps
+# the kernel and drives forge actions through the authorize →
+# dispatch → WAL append loop; `BufferedWalSink` streams the kernel's
+# WAL records into a portable byte form for the demo's `wal_to_sink`
+# round-trip stage.
+arkhe-forge-platform = { path = "../../arkhe-forge-platform", version = "0.13" }
+
+[lints]
+workspace = true

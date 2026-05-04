@@ -1,0 +1,43 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    name: build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test --workspace
+        run: |
+          cargo test --workspace 2>&1 | tee /tmp/test.log
+          actual=$(grep -E "^test result:" /tmp/test.log | awk '{s+=$4} END {print s+0}')
+          expected=$(grep -E "^default=" ci/test-baselines.txt | cut -d= -f2)
+          [ "$actual" = "$expected" ] || { echo "::error::Test count $actual != baseline $expected"; exit 1; }
+
+  lint:
+    name: lint + doc + fmt + axiom-cite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout ArkheKernel sibling repo
+        uses: actions/checkout@v4
+        with:
+          repository: aceamro/ArkheKernel
+          path: ArkheKernel-checkout
+      - name: Relocate ArkheKernel to sibling layout
+        run: |
+          mv ArkheKernel-checkout ../ArkheKernel
+          test -f ../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla \
+            || { echo "::error::Sibling relocation produced wrong layout"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy, rustfmt }
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+      - run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Verify axiom-cite mapping
+        run: bash scripts/verify-axiom-cite.sh

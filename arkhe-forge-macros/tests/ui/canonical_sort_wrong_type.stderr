@@ -1,0 +1,5 @@
+error: #[arkhe(canonical_sort)] is allowed only on `Vec<T>` or `BTreeSet<T>` fields
+ --> tests/ui/canonical_sort_wrong_type.rs:9:27
+  |
+9 |     pub not_a_collection: u32,
+  |                           ^^^

@@ -1,0 +1,64 @@
+[workspace.package]
+# Shared package metadata. Crate-level Cargo.toml inherits via
+# `<field>.workspace = true`. Pinning `rust-version` here makes
+# `cargo build` refuse pre-1.80 toolchains up front instead of
+# failing later inside the compiler — see `docs/msrv-policy.md`.
+rust-version = "1.80"
+edition      = "2021"
+
+[workspace]
+resolver = "2"
+members = [
+    # ArkheForge Runtime (L1 + L2). Shell (BBS 등) 은 별도 repo 에서 개발 — Layer 독립성 directive.
+    "arkhe-forge-core",
+    "arkhe-forge-macros",
+    "arkhe-forge-platform",
+    "arkhe-forge",
+
+    # Runtime test support + lint helpers.
+    "arkhe-runtime-testkit",
+    "arkhe-trait-default-check",
+    "arkhe-subset-rust-check",
+
+    # Educational examples — standalone workspace members. Pattern alignment
+    # with `ArkheKernel/examples/dice/` (own Cargo.toml + src/main.rs).
+    "examples/card_primitives",
+]
+
+# arkhe-runtime-proofs is a standalone Kani harness crate (excluded from
+# the workspace via its own empty `[workspace]` table).
+
+# Workspace dependency version pinning (shared).
+[workspace.dependencies]
+arkhe-kernel       = "0.13"
+arkhe-macros       = "0.13"
+serde              = { version = "1.0",  features = ["derive"] }
+postcard           = { version = "1.0",  features = ["use-std"] }
+blake3             = "1.5"
+ed25519-dalek      = { version = "2",    default-features = false, features = ["std"] }
+bytes              = { version = "1.7",  features = ["serde"] }
+bitflags           = { version = "2.6",  features = ["serde"] }
+arrayvec           = { version = "0.7",  default-features = false, features = ["serde"] }
+argon2             = { version = "0.5",  default-features = false, features = ["alloc", "password-hash"] }
+chacha20poly1305   = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
+aes-gcm            = { version = "0.10", default-features = false, features = ["aes", "alloc", "getrandom"] }
+aes-gcm-siv        = { version = "0.11", default-features = false, features = ["aes", "alloc", "getrandom"] }
+thiserror          = "1.0"
+proptest           = "1.5"
+toml               = "0.8"
+zeroize            = { version = "1.8", features = ["derive"] }
+static_assertions  = "1.1"
+# `rand_core` 0.6 — RngCore trait surface for examples + future runtime
+# RNG abstractions. Pinned to 0.6 (not 0.9) for ed25519-dalek 2 transitive
+# dep alignment + workspace single-version policy. `default-features = false`
+# preserves no_std compatibility for downstream example/runtime extraction.
+rand_core          = { version = "0.6", default-features = false }
+
+# Clippy workspace lints (opt-in via `[lints] workspace = true` per crate).
+[workspace.lints.clippy]
+unwrap_used     = "deny"
+expect_used     = "deny"
+panic           = "deny"
+todo            = "deny"
+unimplemented   = "deny"
+dbg_macro       = "deny"

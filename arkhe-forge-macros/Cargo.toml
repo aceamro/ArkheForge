@@ -1,0 +1,37 @@
+[package]
+name          = "arkhe-forge-macros"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Derive + attribute macros for ArkheForge Runtime: ArkheComponent / ArkheAction / ArkheEvent + #[arkhe_pure] (E14.L1 Subset-Rust purity). Validates TYPE_CODE ranges, BAND classification, schema_version field shape, and Action::compute purity at compile time."
+keywords      = ["derive", "proc-macro", "runtime", "arkhe-forge"]
+categories    = ["development-tools::procedural-macro-helpers"]
+repository    = "https://github.com/aceamro/ArkheForge"
+homepage      = "https://github.com/aceamro/ArkheForge"
+documentation = "https://docs.rs/arkhe-forge-macros"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn                       = { version = "2", features = ["full"] }
+quote                     = "1"
+proc-macro2               = "1"
+darling                   = "0.20"
+# E14.L1 Subset-Rust purity check, called from `#[arkhe_pure]`.
+arkhe-subset-rust-check   = { path = "../arkhe-subset-rust-check", version = "0.13" }
+
+[dev-dependencies]
+trybuild          = "1.0"
+arkhe-forge-core  = { path = "../arkhe-forge-core", version = "0.13" }
+serde             = { workspace = true }
+# `tests/pure_macro.rs` exercises `#[arkhe_pure]` on a pure body that
+# hashes via blake3 — proves the attribute does not reject deterministic
+# crypto primitives.
+blake3            = { workspace = true }
+
+[lints]
+workspace = true

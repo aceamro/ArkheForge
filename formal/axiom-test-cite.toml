@@ -1,0 +1,467 @@
+# formal/axiom-test-cite.toml
+#
+# 12 MC (MACHINE-CHECKED) axioms × TLA+ INV × impl test 1:1 cite
+#
+# Source-of-truth machine-readable mapping for the CI grep gate verification.
+# Companion to formal/tla-plus/README.md narrative table (E1-E15 ↔ TLA+ INV).
+#
+# Anchored to:
+#   - formal/tla-plus/{runtime_core,cr1,cr2,cr3,cr4,r4}.tla (TLA+ refinement)
+#   - arkhe-runtime-proofs/src/lib.rs (Kani 4-property suite)
+#   - arkhe-forge-core/src/**/*.rs inline rustdoc (E-series axiom cites)
+
+[meta]
+schema_version = 1
+formal_method_anchors_local = "formal/tla-plus/{runtime_core,r4_implementation_refinement}.tla"
+formal_method_anchors_kernel = "../ArkheKernel/formal/tla-plus/{cr1_chain_hash_invariant,cr2_state_machine_refinement,cr3_replay_determinism,cr4_observer_capability_confinement}.tla"
+cycle = "v0.13"
+
+# ============================================================
+# Cryptographic refinement primitive class siblings
+# (impl-cite anchors for crypto primitives that the chain hash /
+#  signature pipeline treats as black boxes — no spec body lemma,
+#  no TLA+ INV at this anchor class. PQC Hybrid entry will add
+#  HybridDualSignBoth_implies_* lemma in cr1.tla or cr3.tla, at
+#  which point step 11 typecheck becomes mandatory.)
+# ============================================================
+[E1]
+tier = "MC"
+axiom = "Runtime primitive set = {User, Actor, Space, Entry, Activity}"
+spec_section = "§11.1"
+tla_inv = "CONSTANTS_PrimitiveSet"
+tla_module = "formal/tla-plus/runtime_core.tla"
+tla_note = "definitional CONSTANTS — no state-level INV"
+impl_tests = ["e1_core_5_type_code_ranges_pinned"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:72"]
+
+# ============================================================
+# E2 — Action::compute pure (subsumed by E14)
+# ============================================================
+[E2]
+tier = "MC"
+axiom = "Every Runtime Action compute inherits A11 pure (subsumed by E14)"
+spec_section = "§11.1"
+tla_inv = "ChainHashDeterministic_via_E14_subsumption"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+note = "E2 subsumed by E14 — compute-determinism guarantee covers compute-purity input requirement"
+impl_tests = [
+    "e2_compute_is_deterministic",
+    "e2_gdpr_erase_single_event_per_tick",
+]
+impl_paths = [
+    "arkhe-forge-core/tests/axioms_e_series.rs:85",
+    "arkhe-forge-core/tests/axioms_e_series.rs:261",
+]
+
+# ============================================================
+# E3 — Cross-layer DAG strictly downward
+# ============================================================
+[E3]
+tier = "MC"
+axiom = "Runtime → L0 strictly downward; L1 → L2 forbidden"
+spec_section = "§11.1"
+tla_invs = ["LayerImportStrictlyDownward", "ImportDirectionMonotone"]
+tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
+sibling_concept = "L0-internal 4-stratum DAG"
+runtime_sub_dag_extension = "ImportDirectionMonotone — L1+ runtime sandbox sub-DAG (boundary→runtime single direction); structural witness via impl_test e3_l1_does_not_pull_platform"
+impl_tests = ["e3_l1_does_not_pull_platform"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:107"]
+
+# ============================================================
+# E5 — Actor identity immutable
+# ============================================================
+[E5]
+tier = "MC"
+axiom = "Actor.user_id + Actor.shell_id immutable post-creation"
+spec_section = "§11.2"
+tla_inv = "ActorIdentityImmutable"
+tla_module = "../ArkheKernel/formal/tla-plus/cr2_state_machine_refinement.tla"
+impl_tests = ["e5_actor_immutable_fields_exposed_via_component_pins"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:133"]
+
+# ============================================================
+# E8 — Entry/Space DAG depth-bounded + cycle-free
+# ============================================================
+[E8]
+tier = "MC"
+axiom = "Entry.parent_entry / Space.parent_space cycle-free + depth ≤ 64"
+spec_section = "§11.3"
+tla_invs = ["EntryParentDagDepthBounded", "EntryParentDagAcyclic"]
+tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
+impl_tests = ["e8_dag_depth_caps_match_spec"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:180"]
+
+# ============================================================
+# E9 — Activity self-loop blocked + meta-verb depth ≤ 8
+# ============================================================
+[E9]
+tier = "MC"
+axiom = "Activity self-loop blocked + meta-verb depth ≤ manifest cap (1..=8, hard cap 8)"
+spec_section = "§11.3"
+tla_invs = ["ActivitySelfLoopBlocked", "MetaVerbDepthBounded"]
+tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
+impl_tests = ["e9_meta_verb_depth_hard_cap_is_eight"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:189"]
+
+# ============================================================
+# E11 — Cascade tick deterministic ordering
+# ============================================================
+[E11]
+tier = "MC"
+axiom = "L2 cascade re-submit Op::ScheduleAction Tick(t+1), L0 deterministic order"
+spec_section = "§11.4"
+tla_inv = "CascadeOpDeterministicTickPlacement"
+tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
+impl_tests = ["e11_cascade_scheduler_tick_advance_is_saturating"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:211"]
+
+# ============================================================
+# E12 — RuntimeBootstrap chain-anchored + manifest drift rejected
+# ============================================================
+[E12]
+tier = "MC"
+axiom = "(runtime_semver, manifest_digest) chain-anchored via in-band RuntimeBootstrap event; replay drift rejected"
+spec_section = "§11.4"
+tla_invs = ["RuntimeBootstrapChainAnchored", "ManifestDriftReplayRejected"]
+tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
+impl_tests = ["e12_runtime_bootstrap_event_is_chain_anchored"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:224"]
+
+# ============================================================
+# E13 — SignatureClassPolicy chain-anchored + sticky-Hybrid
+# ============================================================
+[E13]
+tier = "MC"
+axiom = "Shell [audit.signature_class] chain-anchored via SignatureClassPolicy; sticky-Hybrid (post-Hybrid Ed25519 receipts rejected)"
+spec_section = "§11.4 / §14.7 / §14.11"
+tla_invs = ["NoSignatureDowngradeAfterPolicy", "NoPqcDowngradeAttack"]
+tla_theorem = "PolicyMonotonic_Derivable"
+tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
+note = "sticky/monotone wording explicit at §14.11 + cr3 L26-35 module-level comment"
+impl_tests = ["e13_signature_class_policy_anchored_by_type_code"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:248"]
+
+# ============================================================
+# E14.L1-Deny — build-time AST deny-list (Subset-Rust 4-rule)
+# ============================================================
+[E14_L1_Deny]
+tier = "MC"
+axiom = "L1 Action::compute clock/RNG/I/O/FFI deny-list at build time"
+spec_section = "§11.4"
+tla_inv = "ComputePurityHonored"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+crates = [
+    "arkhe-subset-rust-check",
+    "arkhe-forge-macros (#[arkhe_pure])",
+    "arkhe-trait-default-check",
+]
+impl_tests = ["pure_compute_passes", "pure_with_blake3_passes"]
+impl_paths = [
+    "arkhe-subset-rust-check/src/lib.rs:366",
+    "arkhe-subset-rust-check/src/lib.rs:635",
+]
+ui_test_anchor = "arkhe-forge-macros/tests/{pure_instant_now,pure_os_rng,pure_thread_rng,pure_unix_epoch,pure_macro}.rs"
+
+# ============================================================
+# E14.L2-Allow — runtime wasmtime sandbox + host-import allow-list
+# ============================================================
+[E14_L2_Allow]
+tier = "MC"
+axiom = "Hook host v2 wasmtime sandbox: NaN canonicalization + SIMD opt-out + host-import allow-list 4-fn"
+spec_section = "§11.4 / §14.5.1"
+tla_invs = ["ChainHashDeterministic", "HostImportSealed"]
+tla_lemma = "SealedHostLinker_implies_4_set"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+host_imports = [
+    "hook.state.read",
+    "hook.state.write",
+    "hook.emit.extra_bytes",
+    "hook.fuel.consumed",
+]
+e_9_cross_check = "1:1 mapping host-fn 4 ↔ TLA+ HostImports verified"
+impl_tests = [
+    "state_read_traps_with_capability_denied_when_missing",
+    "state_read_returns_minus_one_when_key_not_found",
+    "state_read_returns_seeded_value_length_when_key_found",
+    "state_read_returns_minus_two_when_buffer_too_small",
+    "state_read_traps_on_oob_ptr_plus_len",
+    "state_read_traps_on_negative_len",
+    "state_read_traps_on_negative_ptr",
+    "state_read_traps_on_huge_ptr",
+    "state_read_zero_key_returns_minus_one_in_empty_scratchpad",
+    "state_write_traps_with_capability_denied_when_missing",
+    "state_write_inserts_into_scratchpad",
+    "state_write_traps_on_key_oob",
+    "state_write_traps_on_val_oob",
+    "state_round_trip_write_then_read",
+    "emit_extra_bytes_traps_with_capability_denied_when_missing",
+    "emit_extra_bytes_appends_to_seeded_builder",
+    "emit_extra_bytes_traps_when_extra_not_seeded",
+    "emit_extra_bytes_traps_on_oob",
+    "fuel_consumed_traps_with_capability_denied_when_missing",
+    "fuel_consumed_returns_zero_at_invocation_start",
+    "fuel_consumed_grows_with_wasm_work",
+    "fuel_consumed_handles_zero_initial_gracefully",
+    # EngineProfile factory
+    # tests verify rule 1 (NaN canon) + rule 2 (SIMD off, including
+    # wasm_relaxed_simd) + rule 4 (fuel) at the wasm_runtime_common
+    # factory layer (single source of truth for chain-effect-aware
+    # determinism axis pinning).
+    "engine_profile_replay_deterministic_builds_engine",
+    "engine_profile_replay_deterministic_rejects_simd",
+    "engine_profile_chain_non_affecting_builds_engine",
+    "engine_profile_fuel_budget_accessor",
+    # SealedHostImport sealed-trait
+    # safeguard witness tests verify HostImportSealed INV at the
+    # type-system layer (Rust-side anchor of `pub trait
+    # SealedHostImport: private_seal::Sealed`).
+    "hook_capability_linker_satisfies_sealed_host_import",
+    "observer_capability_linker_satisfies_sealed_host_import",
+    # ChainHashDeterministic
+    # INV implementation witnesses in arkhe-kernel/src/persist/wal.rs.
+    # Explicit ChainBroken path coverage (verify_chain_detects_broken_
+    # prev_link) plus retro-registration of existing verify_chain* tests
+    # that witness the same INV (inventory gap absorb).
+    "verify_chain_detects_broken_prev_link",
+    "verify_chain_against_wrong_world_id_fails",
+    "verify_chain_validates_signatures",
+    # Layer A item 1
+    # (DOMAIN_CTX literal) byte-level formal anchor. The chain key is
+    # derived via blake3::derive_key(DOMAIN_CTX, world_id) — DOMAIN_CTX
+    # byte identity is the upstream precondition of ChainHashDeterministic
+    # (every WAL chain ever produced is keyed with these bytes; one byte
+    # change rederives every chain key). Frozen-hex BLAKE3 regression
+    # witness pins the literal at the byte level (A1/A14).
+    "domain_ctx_byte_identity_blake3",
+    # Layer A item 3 (Principal+KernelEvent+StepStage derives via
+    # arkhe-macros) `silent_ast_risk` ("canonical bytes mutation =
+    # potential A1 bit-identical replay violation") direct closure.
+    # Pins the postcard wire bytes for ArkheComponent + ArkheEvent
+    # derive emission via synthetic test fixtures. Component/Event
+    # canonical_bytes feed into WalRecord.action_bytes (chain hash
+    # upstream) — a postcard re-encoding shift breaks these assertions
+    # before the divergence reaches a chain hash mismatch (A1 + A14
+    # subset coverage; full Layer A item 3 protection in
+    # `[layer_a_items.item_3]`). Dual-witness: byte-identity (rewrite
+    # catch) + parse-back (silent edit catch).
+    "component_canonical_bytes_pinned",
+    "event_canonical_bytes_pinned",
+]
+impl_paths = [
+    "arkhe-forge-platform/src/hook_host/capability_linker.rs",
+    "arkhe-forge-platform/src/wasm_runtime_common/mod.rs",
+    "arkhe-forge-platform/src/wasm_runtime_common/sealed_traits.rs",
+    # ChainHashDeterministic INV witness scope (wal.rs
+    # verify_chain* tests). E14_L2_Allow tla_invs include both
+    # HostImportSealed (wasm runtime) and ChainHashDeterministic (wal
+    # chain hash) — impl_paths span both layers accordingly.
+    "../ArkheKernel/arkhe-kernel/src/persist/wal.rs",
+    # arkhe-macros derive emission canonical_bytes byte-identity
+    # witnesses (component_canonical_bytes_pinned +
+    # event_canonical_bytes_pinned) live in the kernel's integration
+    # test surface (consumed via the same `::arkhe_kernel::...` paths
+    # an external domain crate would use).
+    "../ArkheKernel/arkhe-kernel/tests/derive_macros.rs",
+]
+
+# ============================================================
+# E15 — Observer Capability Confinement (chain-non-affecting 4-clause)
+# ============================================================
+[E15]
+tier = "MC"
+axiom = "Observer sandbox: panic close (a) + capability-token confinement (b); chain-non-affecting 4-clause"
+spec_section = "§11.4 / §14.5.2"
+tla_invs = [
+    "ObserverChainNonAffecting",
+    "ObserverCapabilityConfined",
+    "QuarantineHostSupervised",
+    # sealed-trait type-system anchor of
+    # E15.b confinement (HookCapTokenSealed + ObserverCapTokenSealed).
+    "CapTokenSealed",
+]
+tla_theorem = "ChainProgressionUnaffectedByObserver"
+tla_lemma = "SealedTrait_implies_E15.b"
+tla_module = "../ArkheKernel/formal/tla-plus/cr4_observer_capability_confinement.tla"
+cap_tokens = ["PgWrite"]
+typecode = "0x0003_0F0C"
+impl_tests = [
+    "observer_cap_token_set_is_ordered_for_btreeset",
+    "observer_error_display_does_not_panic",
+    "observer_trap_class_variants_round_trip",
+    "observer_context_carries_only_capabilities",
+    "observer_store_data_with_capabilities_collects",
+    "observer_capability_is_send_sync_debug",
+    "trap_count_starts_at_zero",
+    "trap_count_does_not_increment_on_pass_through_invoke",
+    "observer_host_error_display_does_not_panic",
+    "observer_context_shape_check_holds_at_compile_time",
+    # SealedCapToken sealed-trait
+    # safeguard witness tests verify CapTokenSealed INV at the
+    # type-system layer (Rust-side anchor of `pub trait
+    # HookCapTokenSealed: private_seal::Sealed` +
+    # `ObserverCapTokenSealed: private_seal::Sealed`).
+    "hook_cap_token_satisfies_sealed_bound",
+    "observer_cap_token_satisfies_sealed_bound",
+]
+impl_paths = [
+    "arkhe-forge-platform/src/observer_host/mod.rs",
+    "arkhe-forge-platform/src/observer_host/capability_linker.rs",
+    "arkhe-forge-platform/src/observer_host/wasmtime_observer.rs",
+    "arkhe-forge-platform/src/wasm_runtime_common/mod.rs",
+    "arkhe-forge-platform/src/wasm_runtime_common/sealed_traits.rs",
+]
+
+# ============================================================
+# Layer A item 3 — Principal+KernelEvent+StepStage derives
+# (cryptographer + auditor + theorist joint discovery)
+# ============================================================
+[layer_a_item_3]
+description = "arkhe-macros proc-macro derives (canonical encoding emit)"
+location = "arkhe-macros/src/lib.rs"
+baseline_protection = "verify-l0-baseline.sh 32-files baseline"
+axiom_anchors = ["A1", "A6", "A14", "A23"]
+e_axiom_inheritance = ["E4", "E11", "E12", "E13", "E14"]
+tla_inv_indirect = [
+    "ChainHashDeterministic",
+    "UserIdGloballyUnique",
+    "RuntimeBootstrapChainAnchored",
+    "CascadeOpDeterministicTickPlacement",
+]
+silent_ast_risk = "canonical bytes mutation = potential A1 bit-identical replay violation"
+mitigation = "byte-identity witness via component_canonical_bytes_pinned + event_canonical_bytes_pinned in arkhe-kernel/tests/derive_macros.rs (postcard wire bytes pinned for ArkheComponent + ArkheEvent derive emission)"
+
+# ============================================================
+# Kani 5-property suite
+# ============================================================
+[kani_5_property]
+description = "Implementation-level proof suite (TLA+ refinement complement)"
+location = "arkhe-runtime-proofs/src/lib.rs"
+workspace = "standalone (excluded from root workspace)"
+
+[kani_5_property.kani_authorize_property]
+axiom = "E6 + E7 typestate"
+tla_anchor = "AuthenticatedActorHasUserBinding + ShellBrandConsistent"
+tla_module = "../ArkheKernel/formal/tla-plus/cr2_state_machine_refinement.tla"
+abstract_model = "authorize_model"
+property_statement = "actor authenticated AND shell brand match"
+
+[kani_5_property.kani_dispatch_property]
+axiom = "E14 Compute Determinism"
+tla_anchor = "ChainHashDeterministic"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+abstract_model = "dispatch_model"
+property_statement = "twice-dispatch determinism (same input ⇒ same output)"
+
+[kani_5_property.kani_replay_property]
+axiom = "A1 bit-identical replay (E14 ⇒ A1)"
+tla_anchor = "ChainHashDeterministic"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+abstract_model = "replay_model"
+property_statement = "twice-fold determinism on 3-event window"
+
+[kani_5_property.kani_memory_bounds_check_property]
+axiom = "E14.L2 (firm contract anchor)"
+tla_anchor = "ChainHashDeterministic (runtime sandbox boundary)"
+tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
+abstract_model = "memory_bounds_model"
+property_statement = "OOB rejection sound on (offset, len) symbolic input"
+note = "Overflow branch structurally unreachable under bounded MC"
+
+[kani_5_property.kani_hybrid_and_mode_property]
+axiom = "E13 Hybrid AND-mode dispatch"
+tla_anchor = "HybridDualSignBoth + NoPqcDowngradeAttack"
+tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
+abstract_model = "hybrid_and_mode_model"
+property_statement = "AND-mode dispatch — both Ed25519 AND ML-DSA 65 verify must pass for Hybrid policy"
+
+# ============================================================
+# Layer A 8 items consolidated
+# ============================================================
+[formal_verification_inventory]
+cycle = "v0.13"
+sub_steps_closed = 9
+formal_modules = 6
+tla_invs = 17
+tla_theorems = 2
+tla_lemmas = 2
+kani_properties = 5
+adversary_axes_closed = 3
+e_axioms_anchored = 12
+non_anchored_e_axioms = ["E1 (definitional)", "E2 (subsumed by E14)", "E10 (TYPE-ADJACENT)"]
+l0_a_axioms_anchored = 10
+
+# ============================================================
+# Non-MC axioms (TYPE-PROVEN / TYPE-ADJACENT / RUNTIME-ASSERTED)
+# Inventoried for completeness, NOT in the CI grep gate scope
+# ============================================================
+[non_mc_axioms]
+
+[non_mc_axioms.E4]
+tier = "TYPE-PROVEN"
+axiom = "UserId / ActorId NonZeroU64-backed (A6)"
+tla_inv = "UserIdGloballyUnique"
+impl_tests = ["e4_identifiers_reject_zero_sentinel"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:122"]
+
+[non_mc_axioms.E6]
+tier = "TYPE-PROVEN"
+axiom = "Actor<_, Authenticated> requires UserBinding (typestate)"
+tla_inv = "AuthenticatedActorHasUserBinding"
+impl_tests = ["e6_actor_typestate_transitions_one_way"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:145"]
+
+[non_mc_axioms.E7_submit]
+tier = "TYPE-PROVEN"
+axiom = "Shell isolation submit-site (ShellBrand<'s>)"
+tla_inv = "ShellBrandConsistent"
+impl_tests = ["e7_shell_brand_scope_is_closed"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:165"]
+
+[non_mc_axioms.E10]
+tier = "TYPE-ADJACENT"
+axiom = "ArkheUri 3-tuple (instance, shell, local)"
+note = "type-system level, no TLA+ INV"
+impl_tests = ["e10_arkhe_uri_typecode_registry_structured"]
+impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:199"]
+
+[non_mc_axioms.E7_replay]
+tier = "RUNTIME-ASSERTED"
+axiom = "Shell isolation replay-time (RA fallback)"
+tla_inv = "ShellIsolationOnReplay"
+note = "RA fallback — replay-time check; impl in compute path"
+
+# ============================================================
+# Card primitive (examples/card_primitives) — Step 1 INV stubs
+#
+# Educational scope: examples/ axiom-cite policy exempts educational
+# code from full Band 3 anchoring. Stubs preserved here to carry the
+# 3 invariants forward to Step 6+ when theorist adds Kani harnesses
+# + TLA+ INV anchoring proper.
+#
+# Section names use nested INV.* namespacing so the verify-axiom-cite
+# script treats them as a single silent-skip top-level entry until
+# theorist promotes them to first-class anchors.
+# ============================================================
+[INV.CardEncoding.RoundTrip]
+tier = "RUNTIME-ASSERTED"
+axiom = "Card byte form `(rank-2)*4 + suit` round-trips through from_byte/to_byte for all 52 valid bytes; bytes 52..=255 rejected by both from_byte and serde Deserialize"
+spec_section = "examples/card_primitives/card.rs (module-level design contract)"
+impl_test = "kani_card_byte_roundtrip_property"
+impl_path = "(deferred — theorist 협조 Step 6+ Kani harness)"
+note = "Educational scope (Step 1). Runtime tests round_trip_byte_all_52 + serde_postcard_round_trip_all_52 + serde_rejects_out_of_range_byte cover the property dynamically; Kani all-input proof deferred to Step 6+."
+
+[INV.CardEncoding.Cardinality]
+tier = "RUNTIME-ASSERTED"
+axiom = "Card::new(Rank, Suit) generates exactly 52 distinct values across (Rank::ALL × Suit::ALL); collision-free injection from typed (Rank, Suit) to byte 0..=51"
+spec_section = "examples/card_primitives/card.rs (module-level design contract)"
+impl_test = "card_all_has_52_unique_entries"
+impl_path = "arkhe-forge/examples/card_primitives/card.rs"
+note = "Educational scope (Step 1). Test name carried forward verbatim by team-lead spec; kani harness anchoring deferred to Step 6+."
+
+[INV.RankSuit.TotalOrder]
+tier = "RUNTIME-ASSERTED"
+axiom = "Card Ord is total + transitive: rank-major (face 2..=14) primary, suit Bridge tiebreak (Clubs<Diamonds<Hearts<Spades). Suit Ord explicit impl carries the SUIT-ORDER-CONVENTION doc-anchor."
+spec_section = "examples/card_primitives/card.rs (Suit Ord SUIT-ORDER-CONVENTION doc-anchor)"
+impl_test = "kani_card_rank_total_order_property"
+impl_path = "(deferred — theorist 협조 Step 6+ Kani harness)"
+note = "Educational scope (Step 1). Runtime tests ord_rank_major_then_suit_bridge + ord_transitivity_full_table + suit_ord_bridge_total cover the property on the finite 52-card table; Kani total-order property deferred to Step 6+."

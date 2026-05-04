@@ -1,0 +1,5 @@
+error: first field must be named `schema_version`, got `created_tick`
+ --> tests/ui/missing_schema_version_field.rs:7:9
+  |
+7 |     pub created_tick: u64,
+  |         ^^^^^^^^^^^^

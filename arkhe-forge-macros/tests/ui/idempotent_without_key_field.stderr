@@ -1,0 +1,5 @@
+error: #[arkhe(idempotent)] requires field `idempotency_key: Option<[u8; 16]>`
+ --> tests/ui/idempotent_without_key_field.rs:6:12
+  |
+6 | pub struct IdempotentMissingKey {
+  |            ^^^^^^^^^^^^^^^^^^^^

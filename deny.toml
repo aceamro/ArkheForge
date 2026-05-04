@@ -1,0 +1,73 @@
+# cargo-deny configuration — 단방향 dep enforcement (L0 ← Runtime ← Shell),
+# license whitelist, source restriction.
+
+[graph]
+# Primary target matrix.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+# cargo-audit 통합 — known CVE 차단.
+version = 2
+yanked = "deny"
+
+[licenses]
+# License dual MIT + Apache-2.0 강제. GPL-family reject (수정 공개 의무 회피).
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+# 단방향 dep CI gate. Runtime crate 가 Shell crate 에 depend 시 CI reject.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+# Runtime → Shell dep 금지. Shell crate (`arkhe-shell-*`) 는 별도 repo 이므로
+# 본 workspace dep graph 에 등장하면 재진입 경로 → 전부 ban.
+#
+# `cargo-deny` 의 `[[bans.deny]] name` 은 **정확 일치만 지원** (glob /
+# wildcard 미지원, cargo-deny 0.14+ 기준). 신규 shell crate 가 별도 repo 로
+# 추가될 때마다 본 파일에 명시적 [[bans.deny]] block 등록 의무.
+#
+# 등록 절차:
+#   1. 새 shell repo split 시점에 본 파일에 `[[bans.deny]] name = "<crate>"`
+#      추가 + commit.
+#   2. CI `supply-chain` job 의 `cargo deny check` 가 자동 enforce.
+#   3. `supply-chain/config.toml` 에는 등록하지 않는다 — split 된 shell 의
+#      `cargo vet` 정책은 해당 repo 의 자체 config 가 관리.
+
+[[bans.deny]]
+name = "arkhe-shell-bbs"
+wrappers = []
+
+# 신규 shell 등록 시 아래에 추가:
+# [[bans.deny]]
+# name = "arkhe-shell-casino"
+# wrappers = []
+#
+# [[bans.deny]]
+# name = "arkhe-shell-forum"
+# wrappers = []
+
+[sources]
+# crates.io only. Git dep 은 허용하지 않는다.
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
+allow-git        = []
