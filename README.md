@@ -258,8 +258,6 @@ never reached.
 
 ## Documentation
 
-- API reference: [docs.rs/arkhe-forge](https://docs.rs/arkhe-forge)
-  (post-publish)
 - Kernel architecture book (sibling): [ArkheKernel/book/](https://github.com/aceamro/ArkheKernel/tree/main/book)
 
 ## License
