@@ -87,7 +87,6 @@ tier-2-hook-host-v2 = ["wasmtime", "wasmtime-wasi"]
 # sandbox, just the observer sandbox, or both. Tier-0 / Tier-1 stay on
 # `NoopObserverHost` (v1 pass-through).
 tier-2-observer-host-v2 = ["wasmtime", "wasmtime-wasi"]
-pqc-hybrid       = []                                             # MlDsa65 + hybrid signing
 
 # Platform FFI for `process_protection`.
 # Linux + macOS share the libc surface (mlockall / prctl / setrlimit / ptrace);

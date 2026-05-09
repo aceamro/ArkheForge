@@ -35,7 +35,6 @@ let _ = platform::PLATFORM_SEMVER;
 - `default` — Tier-0 dev only.
 - `tier-1-kms` — proxy to `arkhe-forge-platform/tier-1-kms`.
 - `tier-2-multi-kms` — proxy to `arkhe-forge-platform/tier-2-multi-kms`.
-- `pqc-hybrid` — proxy to `arkhe-forge-platform/pqc-hybrid` (L2 attestation Cargo feature flag).
 
 ## Stability
 

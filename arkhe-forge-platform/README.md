@@ -20,9 +20,9 @@ Feature flags gate the compliance tier:
 - **Tier-1 `tier-1-kms`** — KMS free-tier: Argon2 + XChaCha20-Poly1305.
 - **Tier-2 `tier-2-multi-kms`** — production Multi-KMS + threshold HSM with
   t-of-n Shamir split; adds AES-GCM / AES-GCM-SIV.
-- **`pqc-hybrid`** — L2 attestation Cargo feature flag. The L0 kernel
-  WAL chain signing inherits Hybrid Ed25519 + ML-DSA 65 transitively
-  via `arkhe-kernel` regardless of this flag.
+The L0 kernel WAL chain signing inherits Hybrid Ed25519 + ML-DSA 65
+transitively via `arkhe-kernel`. Forge L2 attestation surfaces emit
+Ed25519.
 
 ## Key services
 

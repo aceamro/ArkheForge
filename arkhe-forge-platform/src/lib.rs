@@ -16,7 +16,10 @@
 //! | `tier-2-aws-kms`           | `aws-sdk-kms`, `aws-config`, `tokio` | Orthogonal AWS KMS backend opt-in — `AwsKmsBackend` impl of [`hf2_kms::KmsBackend`]. |
 //! | `tier-2-hook-host-v2`      | `wasmtime`, `wasmtime-wasi` | Hook host v2 wasmtime sandbox — chain-affecting compute path (E14.L2-Allow). |
 //! | `tier-2-observer-host-v2`  | `wasmtime`, `wasmtime-wasi` | Observer host v2 wasmtime sandbox — chain-non-affecting side-effect path (E15). |
-//! | `pqc-hybrid`               | — | L2 attestation Cargo feature flag. The L0 kernel WAL chain signing inherits Hybrid Ed25519 + ML-DSA 65 transitively via `arkhe-kernel` regardless of this flag. |
+//!
+//! The L0 kernel WAL chain signing inherits Hybrid Ed25519 + ML-DSA 65
+//! transitively via `arkhe-kernel`. Forge L2 attestation surfaces emit
+//! Ed25519.
 //!
 //! Cloud KMS backends are orthogonal to the AEAD tiering — a deployment can
 //! run `tier-1-kms` AEAD with `tier-2-aws-kms` key storage, or any other
