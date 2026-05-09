@@ -20,6 +20,11 @@ members = [
     "arkhe-trait-default-check",
     "arkhe-subset-rust-check",
 
+    # L3 shell-side library — BLAKE3-keyed PRNG (no_std). Shell crates
+    # (BBS, examples) consume it; kernel + forge runtime forbid RNG to
+    # preserve deterministic replay.
+    "arkhe-rand",
+
     # Educational examples — standalone workspace members. Pattern alignment
     # with `ArkheKernel/examples/dice/` (own Cargo.toml + src/main.rs).
     "examples/card_primitives",
@@ -32,6 +37,7 @@ members = [
 [workspace.dependencies]
 arkhe-kernel       = "0.13"
 arkhe-macros       = "0.13"
+arkhe-rand         = "0.13"
 serde              = { version = "1.0",  features = ["derive"] }
 postcard           = { version = "1.0",  features = ["use-std"] }
 blake3             = "1.5"
@@ -53,6 +59,12 @@ static_assertions  = "1.1"
 # dep alignment + workspace single-version policy. `default-features = false`
 # preserves no_std compatibility for downstream example/runtime extraction.
 rand_core          = { version = "0.6", default-features = false }
+# `getrandom` 0.2 — OS CSPRNG front-end. Pinned `default-features = false`
+# (no-std base) so `arkhe-rand` can opt-in via its `os-entropy` feature on
+# WASM / bare-metal targets without dragging in `std`. Consumers that
+# require the std backend (e.g., `arkhe-forge-platform::hf2_kms::threshold`)
+# enable `features = ["std"]` per-crate.
+getrandom          = { version = "0.2", default-features = false }
 
 # Clippy workspace lints (opt-in via `[lints] workspace = true` per crate).
 [workspace.lints.clippy]

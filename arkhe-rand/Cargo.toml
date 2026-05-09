@@ -1,0 +1,33 @@
+[package]
+name          = "arkhe-rand"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "BLAKE3-keyed PRNG with split() determinism — Lemire unbiased range + Fisher-Yates shuffle. Shell-side use (kernel/runtime forbids RNG for deterministic replay)."
+keywords      = ["rng", "blake3", "no-std", "deterministic"]
+categories    = ["no-std", "algorithms"]
+repository    = "https://github.com/aceamro/ArkheForge"
+homepage      = "https://github.com/aceamro/ArkheForge"
+documentation = "https://docs.rs/arkhe-rand"
+license       = "MIT OR Apache-2.0"
+readme        = "README.md"
+authors       = ["Arkhe Contributors"]
+
+[features]
+default     = ["os-entropy"]
+os-entropy  = ["dep:getrandom"]
+
+[dependencies]
+# Direct version pin (not `workspace = true`) so this `#![no_std]` crate
+# can disable blake3's `std` default feature. The workspace dep declares
+# blake3 with default features (other crates use std); arkhe-rand opts
+# out via a parallel inline pin at the same 1.5 version line.
+blake3    = { version = "1.5", default-features = false }
+zeroize   = { workspace = true }
+getrandom = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

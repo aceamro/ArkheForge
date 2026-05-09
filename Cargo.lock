@@ -206,6 +206,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkhe-rand"
+version = "0.13.0"
+dependencies = [
+ "blake3",
+ "getrandom 0.2.17",
+ "proptest",
+ "zeroize",
+]
+
+[[package]]
 name = "arkhe-runtime-testkit"
 version = "0.13.0"
 dependencies = [
