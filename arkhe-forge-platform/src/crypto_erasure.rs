@@ -1,5 +1,4 @@
-//! Erasure cascade observer — E-user-3 cascade activation (spec §14.9 /
-//! §14.9.1).
+//! Erasure cascade observer — E-user-3 cascade activation.
 //!
 //! When the L1 compute emits `UserErasureScheduled` (via `GdprEraseUser`
 //! lease), this observer drains the user's `EncryptedPii<T>` rows, writes
@@ -32,7 +31,7 @@ use crate::projection::{
 
 // ===================== DEK shredder =====================
 
-/// Per-user DEK shred backend — spec §14.9.1 §§5. Production wires this
+/// Per-user DEK shred backend. Production wires this
 /// to an HSM `delete_key` RPC; the in-memory implementation (below) is
 /// sufficient for the Tier-0 dev harness.
 ///
@@ -51,7 +50,7 @@ pub trait DekShredder: Send + Sync {
     /// level idempotency contract for replay semantics.
     fn shred(&mut self, dek_id: DekId) -> Result<DekShredAttestation, DekShredError>;
 
-    /// Multi-region 2PC variant (spec §14.9.1 §§13). Real backends
+    /// Multi-region 2PC variant. Real backends
     /// override this to drive a multi-KMS / multi-region shred and return
     /// the per-region progress entries so the cascade observer can emit
     /// matching `PerRegionErasureProgress` events.
@@ -78,7 +77,7 @@ pub trait DekShredder: Send + Sync {
     }
 }
 
-/// Per-region shred progress entry (spec §14.9.1 §§13 two-phase commit).
+/// Per-region shred progress entry (two-phase commit).
 ///
 /// Single-region backends emit one entry with [`ProgressScope::Region`] /
 /// `"default-region"`; multi-region backends emit one entry per
@@ -137,7 +136,7 @@ pub struct DekShredAttestation {
     /// Signed attestation payload.
     pub attestation_bytes: Bytes,
     /// Monotonic destruction-log sequence — used by the transparency
-    /// layer for gap detection (spec §14.9.1 §§8). `None` when the
+    /// layer for gap detection. `None` when the
     /// attestation is a synthetic no-DEK placeholder (no transparency
     /// entry to anchor); `Some(n)` when a real shredder issued the
     /// receipt. The type is **not** wire-serialised — observer-local
@@ -166,9 +165,7 @@ pub enum DekShredError {
 }
 
 /// In-memory [`DekShredder`] — deterministic Ed25519-style placeholder
-/// attestation for tests and the Tier-0 harness. Production HSM
-/// backend integration is reserved for the `pqc-hybrid` follow-up
-/// release; all current paths emit
+/// attestation for tests and the Tier-0 harness. All paths emit
 /// `RuntimeSignatureClass::Ed25519` regardless of compliance tier.
 #[derive(Debug, Default)]
 pub struct InMemoryDekShredder {
@@ -318,7 +315,7 @@ pub struct ErasureCompletion {
     /// Per-region progress entries (single-element Vec for single-region
     /// backends). Each entry maps 1:1 to a `PerRegionErasureProgress`
     /// event the caller emits before the terminal `UserErasureCompleted`
-    /// (spec §14.9.1 §§13 two-phase commit).
+    /// (two-phase commit).
     pub regions: Vec<RegionProgress>,
 }
 
@@ -395,7 +392,7 @@ impl ErasureCascadeObserver {
     }
 
     /// Convenience — fan out a completion's per-region progress entries
-    /// as `PerRegionErasureProgress` events (spec §14.9.1 §§13 two-phase
+    /// as `PerRegionErasureProgress` events (two-phase
     /// commit). Single-region backends emit one event; multi-
     /// region backends emit one event per participating region. The
     /// caller emits these *before* the terminal `UserErasureCompleted`
@@ -837,7 +834,7 @@ mod tests {
     /// pins that `GdprEraseUser::compute` emits `UserErasureScheduled`.
     /// This platform-level test shows the cascade observer picks the
     /// event up and reaches the `UserErasureCompleted` completion
-    /// record — spec §4.1 E-user-3 / §14.9.
+    /// record — E-user-3 cascade trigger.
     #[test]
     fn e_user_3_cascade_activates_end_to_end() {
         use arkhe_forge_core::action::ActionCompute;

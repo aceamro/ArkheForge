@@ -1,5 +1,4 @@
-//! `ArkheEvent` sealed trait + Core Event catalog (spec §3.2 / §14.5 /
-//! §14.7 / §14.9.1).
+//! `ArkheEvent` sealed trait + Core Event catalog.
 //!
 //! The trait is the runtime's wire-contract marker — `#[derive(ArkheEvent)]`
 //! in `arkhe-forge-macros` is the only way to satisfy it. The catalog in
@@ -7,12 +6,12 @@
 //! (`0x0003_0F01..=0x0003_0F0E`): `HookModuleRegister` anchors hook-module
 //! ingestion receipts, `ObserverQuarantine` anchors observer-host trap
 //! quarantines, and the `ReplicaIdAllocation` + `AuditReceiptKeyPolicy`
-//! pair reserves the §14.7 forward-looking event surface for federation /
+//! pair reserves the forward-looking event surface for federation /
 //! long-term audit activation.
 //!
-//! ## §14.7 forward-looking events — 0-emission posture
+//! ## Forward-looking events — 0-emission posture
 //!
-//! The two §14.7 events ship as **define-only**: type + `ArkheEvent`
+//! These events are **define-only**: type + `ArkheEvent`
 //! derive + `TypeCode` reservation, but **no production code path emits
 //! them**. A 3-layer 0-emission defense:
 //!
@@ -47,7 +46,7 @@ pub trait ArkheEvent:
     crate::__sealed::__Sealed + Serialize + for<'de> Deserialize<'de> + 'static
 {
     /// Runtime `TypeCode` registry pin — Core Events live in
-    /// `0x0003_0F00..=0x0003_FFFF` (spec §3.2 sub-range split).
+    /// `0x0003_0F00..=0x0003_FFFF` (TypeCode sub-range split).
     const TYPE_CODE: u32;
 
     /// Monotone schema version — same rules as `ArkheComponent`.
@@ -61,7 +60,7 @@ pub trait ArkheEvent:
 
 // ===================== Support types =====================
 
-/// Runtime SemVer — fixed-layout 3-tuple, postcard-stable (spec §14.7).
+/// Runtime SemVer — fixed-layout 3-tuple, postcard-stable.
 ///
 /// `semver` crate's pre-release / build metadata strings are variable-width;
 /// the Runtime reserves a minimal 6-byte canonical shape instead.
@@ -88,7 +87,7 @@ impl SemVer {
     }
 }
 
-/// Runtime-only wire-format class tag for audit receipts (spec §14.7).
+/// Runtime-only wire-format class tag for audit receipts.
 ///
 /// Distinct from L0 `arkhe_kernel::persist::SignatureClass` (which
 /// holds key material). The L0 type is unserializable by design; this type
@@ -108,7 +107,7 @@ pub enum RuntimeSignatureClass {
 }
 
 /// Compliance tier classifier — crypto-erasure protection level
-/// (spec §14.11.2 / §14.9.1 §§12).
+/// Compliance tier indicator.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,7 +151,7 @@ pub enum ObserverTrapClass {
 }
 
 /// Progress scope selector for multi-region / multi-KMS erasure progress
-/// (spec §3.2).
+/// (TypeCode reservation).
 #[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ProgressScope {
@@ -164,7 +163,7 @@ pub enum ProgressScope {
 
 // ===================== Core Events =====================
 
-/// `RuntimeBootstrap` — chain-anchored bootstrap receipt (spec §14.7 E12).
+/// `RuntimeBootstrap` — chain-anchored bootstrap receipt (the E12 axiom).
 ///
 /// Emitted at instance first-tick, manifest change, and runtime semver bump.
 /// The `manifest_digest` + `typecode_pins` pair is how WAL replay validates
@@ -189,7 +188,7 @@ pub struct RuntimeBootstrap {
 }
 
 /// `UserErasureScheduled` — GDPR erasure lease accepted; cascade observer
-/// will complete the crypto-shred (spec §14.9).
+/// will complete the crypto-shred.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F02, schema_version = 1)]
 pub struct UserErasureScheduled {
@@ -202,7 +201,7 @@ pub struct UserErasureScheduled {
 }
 
 /// `UserErasureCompleted` — crypto-erasure completion receipt
-/// (spec §14.9.1, chain-anchored transparency).
+/// (chain-anchored transparency).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F03, schema_version = 1)]
 pub struct UserErasureCompleted {
@@ -216,12 +215,12 @@ pub struct UserErasureCompleted {
     pub attestation_class: RuntimeSignatureClass,
     /// HSM attestation bytes (typically 64 or 128 B).
     pub attestation_bytes: Bytes,
-    /// Transparency-log entry index (spec §14.11.3).
+    /// Transparency-log entry index.
     pub transparency_log_index: u64,
 }
 
 /// `BackupErasurePropagated` — per-region offsite tombstone evidence
-/// (spec §14.11.1). Restore must refuse if any region is missing.
+/// Restore must refuse if any region is missing.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F04, schema_version = 1)]
 pub struct BackupErasurePropagated {
@@ -240,7 +239,7 @@ pub struct BackupErasurePropagated {
 }
 
 /// `GdprPolicyViolation` — audit trail for an actor-originated Action that
-/// targeted an ErasurePending User (spec §3.3 L1 compute MC gate).
+/// targeted an ErasurePending User (L1 compute MC gate).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F05, schema_version = 1)]
 pub struct GdprPolicyViolation {
@@ -255,7 +254,7 @@ pub struct GdprPolicyViolation {
 }
 
 /// `SignatureClassPolicy` — chain-anchored shell audit signature policy
-/// (spec §14.7 / E13). Downgrade-resistant by construction.
+/// (the E13 axiom). Downgrade-resistant by construction.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F06, schema_version = 1)]
 pub struct SignatureClassPolicy {
@@ -271,7 +270,7 @@ pub struct SignatureClassPolicy {
 
 /// `CrossShellActivity` — audit trail for a replay/admin path that
 /// observed a record whose `shell_id` mismatched the actor's shell
-/// (spec §4.5 / §13.2, E-act-2 dual-tier RA side).
+/// (E-act-2 dual-tier RA side).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F07, schema_version = 1)]
 pub struct CrossShellActivity {
@@ -288,7 +287,7 @@ pub struct CrossShellActivity {
 }
 
 /// `PerRegionErasureProgress` — multi-region or multi-KMS DEK-shred progress
-/// record (spec §14.9.1 §§13 two-phase-commit).
+/// record (two-phase-commit).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F08, schema_version = 1)]
 pub struct PerRegionErasureProgress {
@@ -307,7 +306,7 @@ pub struct PerRegionErasureProgress {
 }
 
 /// `DekMigrationCompleted` — alpha→beta DEK rotation receipt
-/// (spec §14.7). Emitted when `runtime-doctor pqc-reseal` or similar
+/// Emitted when `runtime-doctor pqc-reseal` or similar
 /// rotation completes for a user.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F09, schema_version = 1)]
@@ -325,7 +324,7 @@ pub struct DekMigrationCompleted {
 }
 
 /// `ComplianceTierChange` — operator-driven Tier transition record
-/// (spec §14.11.2 / §14.9.1 §§12).
+/// Compliance tier indicator.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F0A, schema_version = 1)]
 pub struct ComplianceTierChange {
@@ -342,7 +341,7 @@ pub struct ComplianceTierChange {
 }
 
 /// `HookModuleRegister` — chain-anchored Hook host v2 module-registration
-/// receipt (spec §14.5 / E14.L2).
+/// receipt (E14.L2 axiom).
 ///
 /// Emitted by the wasmtime hook host on every successful
 /// `register_module(bytes, expected_digest)`. Pairs the operator's
@@ -394,14 +393,14 @@ pub struct HookModuleRegister {
     ///
     /// **Semantics distinction**: in this `HookModuleRegister` context
     /// `None` means "Tier 1 BLAKE3 digest pin only; no Tier 2/3
-    /// attestation present". Distinct from §14.7's audit-receipt
+    /// attestation present". Distinct from the audit-receipt
     /// `None` (= "no signature class") which carries different
     /// operational semantics. Same enum, context-specific reading.
     pub attestation_class: RuntimeSignatureClass,
 }
 
 /// `ObserverQuarantine` — chain-anchored Observer host v2 trap-
-/// quarantine receipt (spec §14.5.2 / E15).
+/// quarantine receipt (E15 axiom).
 ///
 /// Emitted by the runtime supervisor when an observer wasm execution
 /// trips a sandbox-boundary failure (panic / budget / capability
@@ -457,7 +456,7 @@ pub struct ObserverQuarantine {
 }
 
 // ============================================================================
-// §14.7 cryptographic primitives — Attestation newtype +
+// Cryptographic primitives — Attestation newtype +
 // AttestationSignerPolicy enum.
 // ============================================================================
 
@@ -581,7 +580,7 @@ pub enum AttestationSignerPolicy {
 }
 
 /// `ReplicaIdAllocation` — federation-replica registration receipt
-/// (spec §14.7 / §15.5). **Define-only**: the type sits behind the
+/// **Define-only**: the type sits behind the
 /// `federation-archive-hardened` Cargo feature so default builds do
 /// not compile the type at all (3-layer 0-emission defense, layer
 /// (b)).
@@ -592,7 +591,7 @@ pub enum AttestationSignerPolicy {
 /// can trace the membership lineage. The wire surface (TypeCode +
 /// schema) is reserved here. Activation gate: federation prerequisites
 /// complete (archive-hardening + `SignedArkheUri` + identity
-/// federation layer per §15.5).
+/// federation layer).
 ///
 /// **0-emission posture**: no production code path calls
 /// `emit_event::<ReplicaIdAllocation>(..)`. A workspace grep test
@@ -635,7 +634,7 @@ pub struct ReplicaIdAllocation {
 }
 
 /// `AuditReceiptKeyPolicy` — audit-receipt key inventory + rotation
-/// manifest (spec §14.7 / E13). **Define-only**: the type sits
+/// manifest (the E13 axiom). **Define-only**: the type sits
 /// behind the `audit-receipt-key-identified` Cargo feature so default
 /// builds do not compile the type (3-layer 0-emission defense, layer
 /// (b)).
@@ -647,7 +646,7 @@ pub struct ReplicaIdAllocation {
 /// consumers can verify which key was active at which tick. The wire
 /// surface is reserved here. Activation gate: operator-side carry-over
 /// (g) "audit-receipt key identity declared in `docs/release-keys.md`
-/// §1 inventory" (cryptographer V4 (g) gate).
+/// inventory anchor.
 ///
 /// **0-emission posture**: identical to `ReplicaIdAllocation` —
 /// production code path emits zero, a workspace grep test verifies,
@@ -667,7 +666,7 @@ pub struct AuditReceiptKeyPolicy {
     /// maps this identifier to the physical key material.
     pub key_id: [u8; 16],
     /// Signature class for receipts under this key. Reuses the
-    /// `RuntimeSignatureClass` enum (spec §14.7) so the wire
+    /// `RuntimeSignatureClass` enum so the wire
     /// tagging is consistent with `SignatureClassPolicy` (E13).
     pub algorithm: RuntimeSignatureClass,
     /// Public-key wire bytes. Variable length to accommodate
@@ -865,7 +864,7 @@ mod tests {
         assert_eq!(back, v);
     }
 
-    // ----- §14.7 forward-looking event tests -----
+    // ----- Forward-looking event tests -----
     //
     // Each test is feature-gated to its activation flag (3-layer
     // 0-emission defense, layer (b)). The default-features build skips

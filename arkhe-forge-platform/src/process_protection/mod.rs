@@ -1,7 +1,7 @@
 //! Process protection trait — spec LF4.
 //!
 //! Per-platform abstraction that lets a Tier-0 software-KEK process
-//! (spec §14.9.1 §§12, §14.7) protect the memory residency of
+//! protects the memory residency of
 //! its key material.
 //!
 //! Three-platform implementation:
@@ -23,15 +23,15 @@
 //!
 //! Runtime startup calls [`ProcessProtection::apply_all()`]; the per-step
 //! syscall failure surfaces as [`ProtectionError::SyscallFailed`] and bubbles
-//! up to `RuntimeInitError::ProcessProtectionUnavailable` (spec §14.9.1 §§12).
+//! up to `RuntimeInitError::ProcessProtectionUnavailable`.
 
 /// Platform-agnostic process protection interface.
 pub trait ProcessProtection {
-    /// Lock all current + future process memory — swap / paging 차단.
+    /// Lock all current + future process memory — block swap / paging.
     fn lock_memory(&self) -> Result<(), ProtectionError>;
-    /// Core dump 생성 금지.
+    /// Disable core dump generation.
     fn disable_core_dump(&self) -> Result<(), ProtectionError>;
-    /// Ptrace / debugger attach 차단.
+    /// Block ptrace / debugger attach.
     ///
     /// **Contract**: an `Ok(())` return guarantees that, at the moment
     /// of the call, no debugger is currently attached **and** the
@@ -53,7 +53,7 @@ pub trait ProcessProtection {
     ///   no portable self-deny primitive.
     fn disable_ptrace(&self) -> Result<(), ProtectionError>;
 
-    /// 3건 전부 적용 — Runtime startup capability check.
+    /// Apply all three — Runtime startup capability check.
     fn apply_all(&self) -> Result<(), ProtectionError> {
         self.lock_memory()?;
         self.disable_core_dump()?;
@@ -62,25 +62,26 @@ pub trait ProcessProtection {
     }
 }
 
-/// Process protection 적용 실패.
+/// Process protection application failure.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ProtectionError {
-    /// 해당 platform 또는 primitive 가 미지원 — macOS `mlockall` 부재가 대표.
+    /// Platform or primitive unsupported — macOS `mlockall` absence is representative.
     #[error("platform unsupported: {0}")]
     Unsupported(&'static str),
-    /// Syscall 실패 (errno 등 platform-specific detail 은 log 경로).
+    /// Syscall failure (errno + platform-specific detail go through the log path).
     #[error("syscall failed: {op} (code {code})")]
     SyscallFailed {
-        /// syscall / API 이름.
+        /// syscall / API name.
         op: &'static str,
-        /// Platform errno 또는 HRESULT.
+        /// Platform errno or HRESULT.
         code: i32,
     },
-    /// Debugger / ptracer 가 이미 attach 된 상태에서 보호 적용 시도.
-    /// `disable_ptrace()` 가 silent warn 만 하면 caller 가 `.is_ok()` 로
-    /// "no debugger" 오해 가능. 이 variant 는 명시적 신호 — operator 가
-    /// detach 후 재시도하거나 startup fail-close (Tier-0 정책).
+    /// Protection applied while a debugger / ptracer is already attached.
+    /// If `disable_ptrace()` only emits a silent warn, a caller could
+    /// misread `.is_ok()` as "no debugger". This variant is the explicit
+    /// signal — operator should detach and retry, or fail-close at
+    /// startup (Tier-0 policy).
     #[error("debugger attached: {0}")]
     DebuggerAttached(&'static str),
 }

@@ -56,7 +56,6 @@ let id = derive_entity_id(
 ## Documentation
 
 - Runtime book: <https://aceamro.github.io/ArkheForge/>
-- API reference: <https://docs.rs/arkhe-forge-core>
 - Repository: <https://github.com/aceamro/ArkheForge>
 
 ## License

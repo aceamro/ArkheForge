@@ -483,7 +483,7 @@ mod tests {
 
     /// Bridge test verifying `BufferedWalSink::extract_seq` tracks the
     /// L0 `WalRecord` schema's leading `seq: u64` field (DO NOT TOUCH
-    /// #8 sentinel).
+    /// #7 sentinel — post-`8bf62eb` Layer A 8→7 renumber, ex-#8).
     ///
     /// Path:
     /// 1. Build a real `Wal` with N records via the Kernel pipeline
@@ -500,7 +500,7 @@ mod tests {
     /// `extract_seq` would parse the wrong leading value and the
     /// assertion would fail. This catches the schema drift before
     /// any production wire damage occurs — the L0 invariant is
-    /// `arkhe_kernel`'s "DO NOT TOUCH #8" anchor, and the Runtime
+    /// `arkhe_kernel`'s "DO NOT TOUCH #7" anchor, and the Runtime
     /// layer holds this bridging test as the cross-layer sentinel.
     ///
     #[test]

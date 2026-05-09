@@ -2,7 +2,7 @@
 # Shared package metadata. Crate-level Cargo.toml inherits via
 # `<field>.workspace = true`. Pinning `rust-version` here makes
 # `cargo build` refuse pre-1.80 toolchains up front instead of
-# failing later inside the compiler — see `docs/msrv-policy.md`.
+# failing later inside the compiler.
 rust-version = "1.80"
 edition      = "2021"
 

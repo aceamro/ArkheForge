@@ -1,4 +1,4 @@
-//! Wire-stability tests — DO NOT TOUCH #8 invariant + stream framing
+//! Wire-stability tests — DO NOT TOUCH #7 invariant + stream framing
 //! format pinning.
 //!
 //! Two independent invariants pinned (cryptographic + format split):
@@ -56,7 +56,7 @@ mod tests {
         sink.into_writer_for_test()
     }
 
-    /// **Invariant #1 (cryptographic, DO NOT TOUCH #8 projection)**:
+    /// **Invariant #1 (cryptographic, DO NOT TOUCH #7 projection)**:
     /// the record section inside a streamed export equals the input
     /// bytes byte-for-byte. Stream layout:
     ///
@@ -67,7 +67,7 @@ mod tests {
     /// The slice `output[16..16+N]` must equal `input[..N]` bit-exact
     /// — no field reordering, no re-encoding, no transformation
     /// inside the streaming layer. This is the runtime-side
-    /// projection of L0 DO NOT TOUCH #8 (postcard field order on
+    /// projection of L0 DO NOT TOUCH #7 (postcard field order on
     /// `WalRecord`).
     #[test]
     fn postcard_record_bytes_preserved_bit_exact() {

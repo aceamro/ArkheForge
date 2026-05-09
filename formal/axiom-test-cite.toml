@@ -27,7 +27,6 @@ cycle = "v0.13"
 [E1]
 tier = "MC"
 axiom = "Runtime primitive set = {User, Actor, Space, Entry, Activity}"
-spec_section = "§11.1"
 tla_inv = "CONSTANTS_PrimitiveSet"
 tla_module = "formal/tla-plus/runtime_core.tla"
 tla_note = "definitional CONSTANTS — no state-level INV"
@@ -40,7 +39,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:72"]
 [E2]
 tier = "MC"
 axiom = "Every Runtime Action compute inherits A11 pure (subsumed by E14)"
-spec_section = "§11.1"
 tla_inv = "ChainHashDeterministic_via_E14_subsumption"
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
 note = "E2 subsumed by E14 — compute-determinism guarantee covers compute-purity input requirement"
@@ -59,7 +57,6 @@ impl_paths = [
 [E3]
 tier = "MC"
 axiom = "Runtime → L0 strictly downward; L1 → L2 forbidden"
-spec_section = "§11.1"
 tla_invs = ["LayerImportStrictlyDownward", "ImportDirectionMonotone"]
 tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
 sibling_concept = "L0-internal 4-stratum DAG"
@@ -73,7 +70,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:107"]
 [E5]
 tier = "MC"
 axiom = "Actor.user_id + Actor.shell_id immutable post-creation"
-spec_section = "§11.2"
 tla_inv = "ActorIdentityImmutable"
 tla_module = "../ArkheKernel/formal/tla-plus/cr2_state_machine_refinement.tla"
 impl_tests = ["e5_actor_immutable_fields_exposed_via_component_pins"]
@@ -85,7 +81,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:133"]
 [E8]
 tier = "MC"
 axiom = "Entry.parent_entry / Space.parent_space cycle-free + depth ≤ 64"
-spec_section = "§11.3"
 tla_invs = ["EntryParentDagDepthBounded", "EntryParentDagAcyclic"]
 tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
 impl_tests = ["e8_dag_depth_caps_match_spec"]
@@ -97,7 +92,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:180"]
 [E9]
 tier = "MC"
 axiom = "Activity self-loop blocked + meta-verb depth ≤ manifest cap (1..=8, hard cap 8)"
-spec_section = "§11.3"
 tla_invs = ["ActivitySelfLoopBlocked", "MetaVerbDepthBounded"]
 tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
 impl_tests = ["e9_meta_verb_depth_hard_cap_is_eight"]
@@ -109,7 +103,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:189"]
 [E11]
 tier = "MC"
 axiom = "L2 cascade re-submit Op::ScheduleAction Tick(t+1), L0 deterministic order"
-spec_section = "§11.4"
 tla_inv = "CascadeOpDeterministicTickPlacement"
 tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
 impl_tests = ["e11_cascade_scheduler_tick_advance_is_saturating"]
@@ -121,7 +114,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:211"]
 [E12]
 tier = "MC"
 axiom = "(runtime_semver, manifest_digest) chain-anchored via in-band RuntimeBootstrap event; replay drift rejected"
-spec_section = "§11.4"
 tla_invs = ["RuntimeBootstrapChainAnchored", "ManifestDriftReplayRejected"]
 tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
 impl_tests = ["e12_runtime_bootstrap_event_is_chain_anchored"]
@@ -133,11 +125,10 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:224"]
 [E13]
 tier = "MC"
 axiom = "Shell [audit.signature_class] chain-anchored via SignatureClassPolicy; sticky-Hybrid (post-Hybrid Ed25519 receipts rejected)"
-spec_section = "§11.4 / §14.7 / §14.11"
 tla_invs = ["NoSignatureDowngradeAfterPolicy", "NoPqcDowngradeAttack"]
 tla_theorem = "PolicyMonotonic_Derivable"
 tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
-note = "sticky/monotone wording explicit at §14.11 + cr3 L26-35 module-level comment"
+note = "sticky/monotone wording at cr3 L26-35 module-level comment"
 impl_tests = ["e13_signature_class_policy_anchored_by_type_code"]
 impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:248"]
 
@@ -147,7 +138,6 @@ impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:248"]
 [E14_L1_Deny]
 tier = "MC"
 axiom = "L1 Action::compute clock/RNG/I/O/FFI deny-list at build time"
-spec_section = "§11.4"
 tla_inv = "ComputePurityHonored"
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
 crates = [
@@ -168,7 +158,6 @@ ui_test_anchor = "arkhe-forge-macros/tests/{pure_instant_now,pure_os_rng,pure_th
 [E14_L2_Allow]
 tier = "MC"
 axiom = "Hook host v2 wasmtime sandbox: NaN canonicalization + SIMD opt-out + host-import allow-list 4-fn"
-spec_section = "§11.4 / §14.5.1"
 tla_invs = ["ChainHashDeterministic", "HostImportSealed"]
 tla_lemma = "SealedHostLinker_implies_4_set"
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
@@ -270,7 +259,6 @@ impl_paths = [
 [E15]
 tier = "MC"
 axiom = "Observer sandbox: panic close (a) + capability-token confinement (b); chain-non-affecting 4-clause"
-spec_section = "§11.4 / §14.5.2"
 tla_invs = [
     "ObserverChainNonAffecting",
     "ObserverCapabilityConfined",
@@ -375,7 +363,7 @@ abstract_model = "hybrid_and_mode_model"
 property_statement = "AND-mode dispatch — both Ed25519 AND ML-DSA 65 verify must pass for Hybrid policy"
 
 # ============================================================
-# Layer A 8 items consolidated
+# Layer A 7 items consolidated
 # ============================================================
 [formal_verification_inventory]
 cycle = "v0.13"

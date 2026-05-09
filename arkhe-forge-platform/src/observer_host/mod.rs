@@ -10,7 +10,7 @@
 //!   - **E15.b** observer side-effects route exclusively through host-
 //!     declared capability tokens; direct syscalls and `wasi-{fs, sockets,
 //!     clocks, random}` are rejected at module-load.
-//! - Spec §5.5 Observer path — L2 projection observers operate *post-commit*
+//! - Observer path — L2 projection observers operate *post-commit*
 //!   on already-chained data; they cannot mutate chain state.
 //!
 //! ## Chain-non-affecting invariant (cryptographer-anchored firm contract)

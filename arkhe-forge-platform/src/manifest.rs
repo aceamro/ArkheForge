@@ -1,4 +1,4 @@
-//! Shell Manifest TOML loader (spec §5.6 / §14.7 / §14.11.2).
+//! Shell Manifest TOML loader.
 //!
 //! The manifest is the single source of ground-truth shell policy: which
 //! audit signature class to require, which compliance tier applies, what
@@ -14,17 +14,17 @@
 //!
 //! The canonical digest is computed as
 //! `blake3::keyed_hash(derive_key("arkhe-forge-manifest-digest", &[]),
-//! toml_canonical_bytes)` — domain-separated per spec §3.2.
+//! toml_canonical_bytes)` — domain-separated.
 
 use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::event::{RuntimeBootstrap, SemVer};
 use arkhe_kernel::abi::{Tick, TypeCode};
 use serde::{Deserialize, Serialize};
 
-/// 32-byte canonical digest of a [`ManifestSnapshot`] (spec §14.7 C5).
+/// 32-byte canonical digest of a [`ManifestSnapshot`] (anchor C5).
 pub type ManifestDigest = [u8; 32];
 
-/// BLAKE3 domain separator for canonical manifest digest (spec §3.2).
+/// BLAKE3 domain separator for canonical manifest digest.
 const DIGEST_DOMAIN: &str = "arkhe-forge-manifest-digest";
 
 // ===================== Sections =====================
@@ -39,7 +39,7 @@ pub struct ShellSection {
     pub display_name: String,
 }
 
-/// Runtime version bounds for this shell (spec §14.7).
+/// Runtime version bounds for this shell.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSection {
@@ -50,7 +50,7 @@ pub struct RuntimeSection {
     pub runtime_current: String,
 }
 
-/// Audit / crypto stance (spec §14.11.2 compliance tiers).
+/// Audit / crypto stance — compliance tier classification.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuditSection {
@@ -62,12 +62,11 @@ pub struct AuditSection {
     pub dek_backend: String,
     /// KMS auto-promote policy — `"manual"` (operator approval) or
     /// `"after_60min"` (auto-promote after 60 minutes of health-check
-    /// consensus, spec §14.11.2).
+    /// consensus).
     pub kms_auto_promote: String,
-    /// Audit receipt signature class (spec §14.7 E13). Active value:
-    /// `"ed25519"`. Reserved values: `"ml-dsa-65"`, `"hybrid"` — wire
-    /// format pinned, forge L2 attestation emits Ed25519 only until the
-    /// `pqc-hybrid` feature is wired in a follow-up release.
+    /// Audit receipt signature class (the E13 axiom). Wire format
+    /// accepts `"ed25519"` / `"ml-dsa-65"` / `"hybrid"`. Forge L2
+    /// attestation emits `"ed25519"`.
     pub signature_class: String,
     /// Compliance tier — `0` (software KEK, dev), `1` (single KMS
     /// free-tier), `2` (production Multi-KMS + threshold HSM).
@@ -75,7 +74,7 @@ pub struct AuditSection {
 }
 
 /// Frontend / TLS / credential policy. Defaults apply when the TOML omits
-/// the `[frontend]` table entirely or any sub-field (spec §11 `[frontend]`).
+/// the `[frontend]` table entirely or any sub-field.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FrontendSection {
@@ -126,7 +125,7 @@ pub enum ManifestError {
     #[error("missing required field: {0}")]
     MissingRequired(&'static str),
 
-    /// Compliance-tier / DEK-backend pair is inconsistent (spec §14.11.2).
+    /// Compliance-tier / DEK-backend pair is inconsistent.
     #[error("tier {tier} incompatible with backend '{backend}'")]
     TierBackendMismatch {
         /// Declared tier.
@@ -136,7 +135,7 @@ pub enum ManifestError {
     },
 
     /// `software-kek` is allowed only on Tier-0 dev runs; production
-    /// runtimes (`runtime_current > 0.15`) reject it (spec §14.9.1 §§12).
+    /// runtimes (`runtime_current > 0.15`) reject it.
     #[error("software-kek rejected: runtime_current {current} > 0.15")]
     SoftwareKekProductionRefused {
         /// Declared current runtime version.
@@ -210,7 +209,7 @@ impl ManifestLoader {
             return Err(ManifestError::VersionMismatch);
         }
 
-        // Tier ↔ backend cross-check (spec §14.11.2).
+        // Tier ↔ backend cross-check.
         match (m.audit.compliance_tier, m.audit.dek_backend.as_str()) {
             (0, "software-kek") => {}
             (0, other) => {
@@ -264,7 +263,7 @@ impl ManifestLoader {
     /// 1. A regression sentinel update in the `digest_invariant` test module
     ///    (`TIER0_DEV_DIGEST_V0_11` constant; test will surface the byte
     ///    drift on first run).
-    /// 2. A spec §5.6 / §14.7 micro-patch documenting the digest re-pin —
+    /// 2. A manifest schema micro-patch documenting the digest re-pin —
     ///    the manifest `schema_version` is **not** bumped on its own (the
     ///    schema itself did not change); the spec patch records the toml
     ///    crate bump as the cause.
@@ -287,7 +286,7 @@ impl ManifestLoader {
 // ===================== RuntimeBootstrap helper =====================
 
 /// Emit a `RuntimeBootstrap` event onto `ctx` using `digest` as the
-/// manifest anchor (spec §14.7 E12). The caller supplies the L0 and
+/// manifest anchor (the E12 axiom). The caller supplies the L0 and
 /// Runtime semver plus the active TypeCode pin set — downstream boot code
 /// plugs in the live registry.
 pub fn emit_runtime_bootstrap(
@@ -312,7 +311,7 @@ pub fn emit_runtime_bootstrap(
 // ===================== Helpers =====================
 
 /// Parse `"M.N"` or `"M.N.P"` into `(major, minor, patch)`. Rejects
-/// pre-release / build-metadata suffixes (spec §14.7 — Runtime does
+/// pre-release / build-metadata suffixes (Runtime does
 /// not accept SemVer 2.0 suffixes for canonical-bytes stability).
 fn parse_version(s: &str) -> Option<(u16, u16, u16)> {
     let mut parts = s.splitn(3, '.');
@@ -439,7 +438,7 @@ compliance_tier = 0
     fn print_tier0_dev_digest_for_pin() {
         // One-shot helper to discover the sentinel bytes; left in the
         // suite so maintainers can re-run it after a deliberate schema
-        // bump (spec §5.6) and copy the new bytes into
+        // bump and copy the new bytes into
         // `digest_invariant::TIER0_DEV_DIGEST_V0_11`.
         let (_, d) = ManifestLoader::load(TIER0_DEV_TOML.as_bytes()).unwrap();
         eprintln!(
@@ -586,8 +585,8 @@ compliance_tier = 0
 /// output. `Cargo.lock` pins the toml minor version, so within the pinned
 /// toml-version window the bytes below are stable. A toml major bump
 /// (`1.x → 2.x`) is expected to change these bytes — the test then surfaces
-/// the drift, the operator updates the sentinel and writes a spec §5.6 /
-/// §14.7 micro-patch documenting the re-pin.
+/// the drift, the operator updates the sentinel and writes a manifest schema
+/// manifest schema micro-patch documenting the re-pin.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod digest_invariant {
@@ -611,7 +610,7 @@ mod digest_invariant {
             digest, TIER0_DEV_DIGEST_V0_11,
             "manifest canonical_digest drifted from the pinned sentinel — check toml crate \
              version, ManifestSnapshot field order, and DIGEST_DOMAIN. Update the sentinel + \
-             write a spec §5.6/§14.7 micro-patch if the change is intentional."
+             write a manifest schema micro-patch if the change is intentional."
         );
     }
 }

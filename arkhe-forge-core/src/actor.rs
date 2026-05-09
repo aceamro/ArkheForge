@@ -1,4 +1,4 @@
-//! Actor primitive — per-shell activity subject (spec §4.2).
+//! Actor primitive — per-shell activity subject.
 //!
 //! `Actor<'s, S>` carries two compile-time proofs: the shell brand `'s`
 //! (typed isolation) and the `ActorState` typestate (authentication status).

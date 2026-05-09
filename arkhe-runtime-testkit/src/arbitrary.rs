@@ -1,7 +1,8 @@
 //! `proptest::Arbitrary` impl for Runtime primitive types.
 //!
-//! 각 type 의 value 영역을 정확히 cover — spec 의 경계값 (TypeCode range
-//! boundary / BoundedString N limit / Tick monotone) 을 fuzz 경로에 직접 주입.
+//! Cover each type's value domain precisely — spec boundary values
+//! (TypeCode range boundary / BoundedString N limit / Tick monotone)
+//! are injected directly into the fuzz path.
 
 use proptest::prelude::*;
 
@@ -27,15 +28,15 @@ pub fn shell_scoped_typecode() -> impl Strategy<Value = u32> {
     typecode::SHELL_SCOPED.0..=typecode::SHELL_SCOPED.1
 }
 
-/// Tick value strategy — u64 전 영역 fuzz.
+/// Tick value strategy — fuzz the full u64 domain.
 pub fn tick_value() -> impl Strategy<Value = u64> {
     0u64..=u64::MAX
 }
 
-/// NonZeroU64 entity id strategy — L0 A6 승계.
+/// NonZeroU64 entity id strategy — inherits L0 A6.
 pub fn entity_id_nz() -> impl Strategy<Value = core::num::NonZeroU64> {
     (1u64..=u64::MAX).prop_map(|v| {
-        // 1..=u64::MAX 이므로 NonZeroU64::new 가 Some 보장 — safe 경로.
+        // 1..=u64::MAX guarantees NonZeroU64::new returns Some — safe path.
         core::num::NonZeroU64::new(v).unwrap_or(core::num::NonZeroU64::MIN)
     })
 }

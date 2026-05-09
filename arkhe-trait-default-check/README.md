@@ -2,7 +2,7 @@
 
 **Trait default-body fingerprint lint for [ArkheForge Runtime](../arkhe-forge).**
 
-Enforces the roadmap §6 "Minor-1 breaking change" rule: a semantic change to a
+Enforces the "Minor-1 breaking change" rule: a semantic change to a
 trait's default method body is a breaking change, even when the signature is
 unchanged. This crate detects such changes in CI by hashing the AST of each
 default body and comparing against a baseline.
@@ -47,7 +47,6 @@ assert_eq!(fps[0].body_hash.len(), 64); // BLAKE3 hex
 ## Documentation
 
 - Runtime book: <https://aceamro.github.io/ArkheForge/>
-- API reference: <https://docs.rs/arkhe-trait-default-check>
 - Repository: <https://github.com/aceamro/ArkheForge>
 
 ## License

@@ -1,6 +1,6 @@
 //! Threshold HSM pre-sign library — byte-level GF(256) Shamir secret sharing.
 //!
-//! Spec §14.11.2.1 + §14.11.3. Distributes the auto_promote
+//! Distributes the auto_promote
 //! authorization token via `t-of-n` Shamir secret sharing; promotion consumes
 //! `t` shares to reconstruct the token and appends an entry to the consumed
 //! journal.
@@ -27,20 +27,20 @@
 
 use getrandom::getrandom as os_getrandom;
 
-/// Shamir threshold configuration — 기본 `t=2, n=3`.
+/// Shamir threshold configuration — default `t=2, n=3`.
 #[derive(Debug, Clone, Copy)]
 pub struct ThresholdConfig {
-    /// Share 합성에 필요한 minimum count.
+    /// Minimum share count required for reconstruction.
     pub t: u8,
-    /// 전체 share 개수.
+    /// Total share count.
     pub n: u8,
 }
 
 impl ThresholdConfig {
-    /// 기본 설정 — 2-of-3.
+    /// Default config — 2-of-3.
     pub const DEFAULT: Self = Self { t: 2, n: 3 };
 
-    /// `2 <= t <= n <= 255`. `n == 255` 는 index 0 예약 (secret) 때문에 허용.
+    /// `2 <= t <= n <= 255`. `n == 255` is allowed because index 0 is reserved (secret).
     pub fn is_valid(&self) -> bool {
         self.t >= 2 && self.t <= self.n
     }
@@ -56,7 +56,7 @@ pub struct Share {
     pub bytes: Vec<u8>,
 }
 
-/// Threshold 연산 에러.
+/// Threshold computation error.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ThresholdError {
@@ -71,9 +71,9 @@ pub enum ThresholdError {
     /// `combine_shares` received fewer than `t` shares.
     #[error("insufficient shares: need {need}, got {got}")]
     InsufficientShares {
-        /// 필요한 수.
+        /// Required count.
         need: usize,
-        /// 실제 수.
+        /// Actual count.
         got: usize,
     },
     /// A share carries index `0` (reserved) or index `> 255` (impossible since

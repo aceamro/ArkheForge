@@ -1,15 +1,11 @@
-//! Scope-based shrinker — body to be expanded in a future release.
+//! Scope-based shrinker — TypeCode-region per-shrink path.
 //!
 //! Runs a separate shrink path per TypeCode region. For example, a failure in
 //! the core Component range (`0x0003_0000..=0x0003_0EFF`) is minimized within
 //! that range only rather than migrated into the shell-scoped range, which
 //! keeps the originating region pinned.
-//!
-//! A future release adds a concrete shrinker trait that integrates with
-//! `proptest::test_runner::TestRunner`.
 
-/// Shrink scope marker — used by a future release as the shrink-path dispatch
-/// key.
+/// Shrink scope marker — TypeCode-region dispatch key for shrink paths.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShrinkScope {

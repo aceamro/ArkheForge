@@ -3,8 +3,8 @@
 //! # Three firm requirements
 //!
 //! 1. **Fixed-width `u64` big-endian length prefix** before every record
-//!    in the stream — deterministic + cross-platform; varint deferred
-//!    pending separate determinism review.
+//!    in the stream — deterministic + cross-platform; varint routes
+//!    through a separate determinism verify path.
 //! 2. **Bounds-check on the length prefix** before any deref of record
 //!    bytes — `0 < prefix ≤ `[`MAX_RECORD_BYTES`]. Malformed prefixes
 //!    MUST be rejected with
@@ -22,11 +22,11 @@
 //! deliberately absent from the trait surface** — external callers
 //! cannot invoke them through the trait, and the L0 A14 append-only
 //! invariant is projected into the L2 export layer **without touching
-//! L0 source** (DO NOT TOUCH #8 preserved). Concrete implementations
+//! L0 source** (DO NOT TOUCH #7 preserved). Concrete implementations
 //! MAY add private internal positioning helpers but MUST NOT expose
 //! them on the public surface.
 //!
-//! # DO NOT TOUCH #8 (postcard field order) invariant
+//! # DO NOT TOUCH #7 (postcard field order) invariant
 //!
 //! The streaming format wraps **unmodified L0 record bytes**. The
 //! length-prefix + stream-header framing wraps the protected payload
@@ -75,7 +75,7 @@ mod round_trip_tests;
 pub const STREAM_HEADER_MAGIC: [u8; 8] = *b"ARKHEXP1";
 
 /// Stream-header magic version dispatch — cross-version
-/// forward-compat scaffold. Each enum variant maps to a distinct
+/// forward-compat dispatch surface. Each enum variant maps to a distinct
 /// 8-byte ASCII tag at the start of an exported stream; the reader
 /// dispatches on the recognised tag to select the corresponding
 /// frame-format parser.
@@ -410,7 +410,7 @@ pub trait WalRecordSink {
     /// `WalRecord`. The wire-stability test
     /// `postcard_record_bytes_preserved_bit_exact` verifies that
     /// streamed bytes match `Wal::serialize` record-section bytes
-    /// without any field-order rewrite (DO NOT TOUCH #8).
+    /// without any field-order rewrite (DO NOT TOUCH #7).
     fn append_record(&mut self, record_bytes: &[u8]) -> Result<(), WalExportError>;
 
     /// Flush buffered records to the underlying durable storage.

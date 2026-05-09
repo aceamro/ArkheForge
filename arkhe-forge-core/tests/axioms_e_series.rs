@@ -66,12 +66,12 @@ fn valid_credential() -> AuthCredential {
 }
 
 /// **E1** — Core 5 primitive set is fixed at {User, Actor, Space, Entry,
-/// Activity}; additions require the §7.4 gate plus a Runtime semver bump.
-/// Spec §11.1.
+/// Activity}; additions require the addition gate plus a Runtime semver bump.
+/// E1 invariant.
 #[test]
 fn e1_core_5_type_code_ranges_pinned() {
     // The Core primitive TypeCode registry slots are reserved at fixed
-    // ranges (spec §3.2). Movement of any range below is a breaking change.
+    // ranges. Movement of any range below is a breaking change.
     assert_eq!(typecode::CORE_ENTITY, (0x0001_0000, 0x0001_FFFF));
     assert_eq!(typecode::CORE_COMPONENT, (0x0003_0000, 0x0003_0EFF));
     assert_eq!(typecode::CORE_EVENT, (0x0003_0F00, 0x0003_FFFF));
@@ -80,7 +80,7 @@ fn e1_core_5_type_code_ranges_pinned() {
 
 /// **E2** — Every Runtime Action `compute` is pure (A11). Determinism MC —
 /// two invocations against an identically-seeded context yield byte-identical
-/// event streams. Spec §11.1.
+/// event streams.
 #[test]
 fn e2_compute_is_deterministic() {
     let act = GdprEraseUser {
@@ -102,12 +102,12 @@ fn e2_compute_is_deterministic() {
 
 /// **E3** — Runtime → L0 unidirectional. L1 must not import L2
 /// (`arkhe-forge-platform`). Enforced by workspace dependency graph — the
-/// CI `cargo-depgraph` gate rejects any upward edge. Spec §11.1.
+/// CI `cargo-depgraph` gate rejects any upward edge.
 #[test]
 fn e3_l1_does_not_pull_platform() {
     // This test is a documentation anchor — the actual enforcement lives in
     // `Cargo.toml` (no `arkhe-forge-platform` dep) and in the `cargo-depgraph`
-    // CI check (§2.3). If the dependency appears, this crate stops compiling
+    // CI check. If the dependency appears, this crate stops compiling
     // against platform-absent test runs.
     let cargo = include_str!("../Cargo.toml");
     assert!(
@@ -117,7 +117,7 @@ fn e3_l1_does_not_pull_platform() {
 }
 
 /// **E4** — `UserId` / `ActorId` are `NonZeroU64`-backed (A6), so the zero
-/// sentinel is structurally unrepresentable. TYPE-PROVEN. Spec §11.2.
+/// sentinel is structurally unrepresentable. TYPE-PROVEN.
 #[test]
 fn e4_identifiers_reject_zero_sentinel() {
     assert!(EntityId::new(0).is_none());
@@ -128,7 +128,7 @@ fn e4_identifiers_reject_zero_sentinel() {
 /// creation. Re-applying `UserBinding` or `ActorProfile` at runtime must
 /// reject (A17). The L0 bridge (future release) will enforce this via the
 /// `SetComponent` re-apply rejection path; the current skeleton surfaces
-/// the `ArkheComponent` impl pinning the wire contract. Spec §11.2.
+/// the `ArkheComponent` impl pinning the wire contract.
 #[test]
 fn e5_actor_immutable_fields_exposed_via_component_pins() {
     use arkhe_forge_core::actor::{ActorProfile, UserBinding};
@@ -140,7 +140,7 @@ fn e5_actor_immutable_fields_exposed_via_component_pins() {
 
 /// **E6** — `Actor<'_, Authenticated>` requires `UserBinding`;
 /// `Actor<'_, Anonymous>` cannot carry one. Typestate. TYPE-PROVEN.
-/// Spec §11.2.
+/// E5/E6 invariants.
 #[test]
 fn e6_actor_typestate_transitions_one_way() {
     use arkhe_forge_core::actor::{Actor, ActorId, Anonymous, Authenticated, Suspended};
@@ -160,7 +160,7 @@ fn e6_actor_typestate_transitions_one_way() {
 /// admin compute runs a runtime `ActorProfile.shell_id == target.shell_id`
 /// check. The current skeleton has the brand plumbing; the MC fallback
 /// lands in a follow-up release once `ctx.read::<ActorProfile>` ships.
-/// Spec §11.2.
+/// E5/E6 invariants.
 #[test]
 fn e7_shell_brand_scope_is_closed() {
     let observed = ShellBrand::run(|_brand| {
@@ -175,7 +175,7 @@ fn e7_shell_brand_scope_is_closed() {
 /// free with depth ≤ 64 via the `ParentChainDepth` / `EntryParentDepth`
 /// O(1) caches. The skeleton surfaces the depth constant; a future release
 /// wires the runtime rejection in `CreateSpace` / `SubmitEntry` compute.
-/// Spec §11.3.
+/// E7/E8 invariants.
 #[test]
 fn e8_dag_depth_caps_match_spec() {
     assert_eq!(MAX_SPACE_DEPTH, 64);
@@ -184,7 +184,7 @@ fn e8_dag_depth_caps_match_spec() {
 
 /// **E9** — Activity self-loop rejection + meta-verb depth ≤
 /// `manifest.moderation.appeal_max_depth` (1..=8, default 2). Runtime hard
-/// cap is 8. Spec §11.3.
+/// cap is 8.
 #[test]
 fn e9_meta_verb_depth_hard_cap_is_eight() {
     assert_eq!(APPEAL_MAX_DEPTH_CAP, 8);
@@ -194,10 +194,10 @@ fn e9_meta_verb_depth_hard_cap_is_eight() {
 /// local)` with `kind` as a phantom. TYPE-ADJACENT — the structure lives
 /// in the runtime-admin crate (future release). The current skeleton
 /// verifies the prerequisite `TypeCode` registry structure is intact.
-/// Spec §11.4.
+/// E9-E13 invariants.
 #[test]
 fn e10_arkhe_uri_typecode_registry_structured() {
-    // Registry sub-ranges must stay distinct and ordered — see spec §3.2.
+    // Registry sub-ranges must stay distinct and ordered.
     let (core_entity_lo, core_entity_hi) = typecode::CORE_ENTITY;
     let (core_component_lo, _) = typecode::CORE_COMPONENT;
     assert!(core_entity_hi < core_component_lo);
@@ -206,7 +206,7 @@ fn e10_arkhe_uri_typecode_registry_structured() {
 
 /// **E11** — L2 post-event cascade resubmits run at `Tick(t+1)` via
 /// `Op::ScheduleAction`. L0 scheduler orders ticks deterministically.
-/// Surfaces deterministic tick advance. Spec §11.4.
+/// Surfaces deterministic tick advance.
 #[test]
 fn e11_cascade_scheduler_tick_advance_is_saturating() {
     // `Tick::advance` is saturating (L0 A23). Cascade re-submit relies on
@@ -219,7 +219,7 @@ fn e11_cascade_scheduler_tick_advance_is_saturating() {
 /// **E12** — `RuntimeBootstrap` is emitted as an in-band `Op::EmitEvent`
 /// entry so the `(runtime_semver, manifest_digest)` pair is folded into
 /// L0 chain hash. Replay drift rejects via `ReplayError::ManifestDrift`.
-/// Spec §11.4 / §14.7.
+///.
 #[test]
 fn e12_runtime_bootstrap_event_is_chain_anchored() {
     assert_eq!(
@@ -243,7 +243,7 @@ fn e12_runtime_bootstrap_event_is_chain_anchored() {
 
 /// **E13** — Shell `[audit.signature_class]` policy is chain-anchored
 /// via `SignatureClassPolicy`. A Hybrid declaration at tick T forbids any
-/// Ed25519-only receipt at tick T+Δ. Spec §11.4 / §14.7.
+/// Ed25519-only receipt at tick T+Δ..
 #[test]
 fn e13_signature_class_policy_anchored_by_type_code() {
     assert_eq!(

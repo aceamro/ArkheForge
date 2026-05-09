@@ -81,7 +81,6 @@ assert!(violations[0].denied_path.contains("Instant::now"));
 ## Documentation
 
 - Runtime book: <https://aceamro.github.io/ArkheForge/>
-- API reference: <https://docs.rs/arkhe-subset-rust-check>
 - Repository: <https://github.com/aceamro/ArkheForge>
 
 ## License

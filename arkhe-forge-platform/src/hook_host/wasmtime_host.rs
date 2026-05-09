@@ -30,7 +30,7 @@
 //!   Modules without the export trap with the missing-export message;
 //!   no module registered → pass-through `Ok(())` matching
 //!   [`super::NoopHookHost`].
-//! - 3-tier ingestion scaffold ([`HookAttestationVerifier`]):
+//! - 3-tier ingestion ([`HookAttestationVerifier`]):
 //!   - **Tier 1** — BLAKE3 digest pin enforced at the host level via
 //!     [`WasmtimeHookHost::register_module`].
 //!   - **Tier 2** (sigstore signature) + **Tier 3** (cargo-vet
@@ -44,8 +44,8 @@
 //!
 //! - **E14 Compute Determinism Closure** — Runtime axiom.
 //! - **E14.L2-Allow** runtime realisation (this module).
-//! - Spec §14.5 Hook host configuration.
-//! - Spec §5.3 Hook contract (Auth → Hook → Policy re-validation → Build).
+//! - Hook host configuration.
+//! - Hook contract (Auth → Hook → Policy re-validation → Build).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -568,7 +568,7 @@ pub enum Tier23Source {
 
 /// 3-tier hook ingestion verifier. Tier 1 (BLAKE3 digest pin) is wired
 /// directly into [`WasmtimeHookHost::register_module`]; this trait
-/// scaffolds Tier 2 (sigstore sign-before-load) + Tier 3 (cargo-vet
+/// dispatches Tier 2 (sigstore sign-before-load) + Tier 3 (cargo-vet
 /// provenance) so operators can swap in active verifiers without
 /// touching the host construction path.
 ///
@@ -917,7 +917,7 @@ mod tests {
         assert!(matches!(err, HookHostError::ModuleParseFailed { .. }));
     }
 
-    // ---- BLAKE3 digest pin + Tier1OnlyVerifier scaffold ----
+    // ---- BLAKE3 digest pin + Tier1OnlyVerifier ----
 
     #[test]
     fn register_module_rejects_digest_mismatch() {

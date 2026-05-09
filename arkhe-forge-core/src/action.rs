@@ -1,4 +1,4 @@
-//! `ArkheAction` + `ActionCompute` sealed traits — spec §3.3 / §3.6.
+//! `ArkheAction` + `ActionCompute` sealed traits.
 //!
 //! `ArkheAction` is the wire-metadata trait produced by
 //! `#[derive(ArkheAction)]`. `ActionCompute` pairs with it: each Action
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::{ActionContext, ActionError};
 
-/// Determinism band per spec §9.
+/// Determinism band classification.
 ///
 /// * `1` — Core (L0 replay-identical).
 /// * `2` — Projection (eventually consistent).

@@ -1,4 +1,4 @@
-//! User primitive — Identity Subject (spec §4.1).
+//! User primitive — Identity Subject.
 //!
 //! Runtime-global identity carrier. `UserProfile` tracks GDPR lifecycle; one
 //! or more `AuthCredential`s attach Argon2id / Scrypt KDF secrets. The User
@@ -13,7 +13,7 @@ use crate::context::{ActionContext, ActionError};
 use crate::event::UserErasureScheduled;
 use crate::ArkheAction;
 use crate::ArkheComponent;
-// E14.L1-Deny enforcement on Action::compute (auditor cross-review Q2(i)).
+// E14.L1-Deny enforcement on Action::compute.
 use crate::arkhe_pure;
 
 /// Opaque handle into the runtime User namespace.
@@ -57,7 +57,7 @@ pub enum AuthKind {
 }
 
 /// GDPR lifecycle state. Transition to `ErasurePending` blocks all
-/// actor-originated Actions on the user (compute MC gate, spec §3.3 #5).
+/// actor-originated Actions on the user (compute MC gate, contract #5).
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -123,7 +123,7 @@ pub struct AuthCredential {
     pub credential_hash: [u8; 32],
     /// Cost parameters used for `credential_hash`.
     pub kdf_params: KdfParams,
-    /// Optional rotation deadline (spec §14.7 S8).
+    /// Optional rotation deadline (S8 anchor).
     pub expires_tick: Option<Tick>,
     /// Tick at which the credential was bound.
     pub bound_tick: Tick,
@@ -174,7 +174,7 @@ pub struct RegisterUser {
 }
 
 /// Request GDPR crypto-erasure for an existing User. Lease — actual cascade
-/// runs via the §14.9 observer with p95 < 24h SLA.
+/// runs via the erasure-cascade observer with p95 < 24h SLA.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheAction)]
 #[arkhe(type_code = 0x0001_0003, schema_version = 1, band = 1)]
 pub struct GdprEraseUser {

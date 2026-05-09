@@ -1,6 +1,6 @@
-//! §14.7 3-layer 0-emission defense Layer (d) **mechanical proof**.
+//! Forward-looking event 3-layer 0-emission defense Layer (d) **mechanical proof**.
 //!
-//! Asserts that production runtime code never references the §14.7
+//! Asserts that production runtime code never references the
 //! forward-looking event types `ReplicaIdAllocation` /
 //! `AuditReceiptKeyPolicy` outside of their **definition site** and
 //! the **TypeCode reservation site** in `arkhe-forge-core`.
@@ -40,7 +40,7 @@
 //! structural-invariant `syn` scaffolding. The "do one thing well"
 //! framing reads workspace-wide structural invariant scan as a single
 //! dimension covering trait-default-body fingerprint (E14.L1),
-//! Action-compute coverage (E14.L1 lint trip), and §14.7
+//! Action-compute coverage (E14.L1 lint trip), and forward-looking
 //! 0-emission Layer (d).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]

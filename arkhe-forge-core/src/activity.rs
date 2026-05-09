@@ -1,6 +1,6 @@
-//! Activity primitive — actor→target verb (spec §4.5).
+//! Activity primitive — actor→target verb.
 //!
-//! Three-layer split (R4' C1 / NC1):
+//! Three-layer split: ActivityRecord / Activity / SubmitActivity
 //! - [`ActivityRecord`] — storage-safe Component, `'static`, postcard-canonical.
 //! - [`Activity<'s>`] — runtime-only branded wrapper used at submit-site for
 //!   compile-time shell isolation.
@@ -22,7 +22,7 @@ use crate::entry::EntryId;
 use crate::space::SpaceId;
 use crate::ArkheAction;
 use crate::ArkheComponent;
-// E14.L1-Deny enforcement on Action::compute (auditor cross-review Q2(i)).
+// E14.L1-Deny enforcement on Action::compute.
 use crate::arkhe_pure;
 
 /// Opaque handle into the runtime Activity namespace.
@@ -70,7 +70,7 @@ pub struct ShellVerb<const C: u32> {
 
 impl<const C: u32> ShellVerb<C> {
     /// Construct a `ShellVerb<C>` witness iff `C` lies in the shell verb
-    /// sub-range `0x0002_0400..=0x0002_FFFF` (spec §3.2).
+    /// sub-range `0x0002_0400..=0x0002_FFFF`.
     #[inline]
     #[must_use]
     pub const fn try_new() -> Option<Self> {
@@ -179,7 +179,7 @@ impl TargetKind {
     /// component (`EntryCore.shell_id`, `ActorProfile.shell_id`,
     /// `SpaceConfig.shell_id`, `ActivityRecord.shell_id`, or
     /// `EntityShellId.shell_id` for Extension targets). Until then the
-    /// current skeleton returns a zeroed `ShellId` placeholder; callers
+    /// returns a zeroed `ShellId` for callers
     /// that need the real shell must pass it explicitly via
     /// [`TargetKind::key_with_shell`].
     #[must_use]
@@ -234,7 +234,7 @@ pub enum ActivityStatus {
 }
 
 /// Storage-safe Activity record. `'static`, postcard-DeserializeOwned,
-/// brand-free — this is what the WAL stores and observers read (spec §4.5 C1).
+/// brand-free — this is what the WAL stores and observers read (C1 contract).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheComponent)]
 #[arkhe(type_code = 0x0003_0401, schema_version = 1)]
 pub struct ActivityRecord {
@@ -258,7 +258,7 @@ pub struct ActivityRecord {
 }
 
 /// Runtime-only branded Activity wrapper — used at submit-site for
-/// compile-time shell isolation (spec §4.5 C1).
+/// compile-time shell isolation (C1 contract).
 #[derive(Clone)]
 pub struct Activity<'s> {
     brand: ShellBrand<'s>,
@@ -300,7 +300,7 @@ pub struct SubmitActivity {
     pub schema_version: u16,
     /// Record payload.
     pub record: ActivityRecord,
-    /// Opt-in idempotency key (spec §3.3). `None` = non-idempotent.
+    /// Opt-in idempotency key. `None` = non-idempotent.
     pub idempotency_key: Option<[u8; 16]>,
 }
 
@@ -341,7 +341,7 @@ impl ActionCompute for SubmitActivity {
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
         // E-user-3 C3 MC — refuse if the actor's backing user is in
         // `GdprStatus::ErasurePending`. Cascade owns the only legal write
-        // path until completion (spec §3.3 C3).
+        // path until completion (C3 contract).
         ctx.ensure_actor_eligible(self.record.actor, ctx.tick())?;
 
         if let Some(key) = self.idempotency_key {
@@ -353,7 +353,7 @@ impl ActionCompute for SubmitActivity {
         // E-act-5 MC — self-loop rejection. The `preview_next_id_for` peek
         // yields the `EntityId` that the upcoming `spawn_entity_for` call
         // will produce; if the activity targets itself we refuse before
-        // any `Op` is pushed to the buffer (spec §4.5 invariant E-act-5).
+        // any `Op` is pushed to the buffer (E-act-5 invariant).
         let predicted = ctx.preview_next_id_for::<ActivityRecord>()?;
         if let TargetKind::Activity(target) = &self.record.target {
             if target.get() == predicted {
@@ -370,7 +370,7 @@ impl ActionCompute for SubmitActivity {
 impl ActionCompute for RetractActivity {
     #[arkhe_pure]
     fn compute<'i>(&self, _ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
-        // A future release reads the existing `ActivityRecord` via
+        // The host reads the existing `ActivityRecord` via
         // `ctx.read::<C>(activity_id)`, produces a tombstone variant, and
         // pushes `Op::SetComponent` with the updated status + index delta.
         Ok(())

@@ -1,6 +1,6 @@
 //! # ArkheForge Runtime — L2 Services / Platform (`arkhe-forge-platform`)
 //!
-//! Spec §5.2 surface — Manifest loader, L2 projection observer, Policy,
+//! L2 services surface — Manifest loader, L2 projection observer, Policy,
 //! Rate limit, Audit receipt issuance, Cascade scheduler, Idempotency dedup,
 //! GDPR erasure-cascade service, DR coordinator. Depends on L0
 //! `arkhe-kernel` plus L1 `arkhe-forge-core` only — no upward edge
@@ -14,10 +14,9 @@
 //! | `tier-1-kms`               | `argon2`, `chacha20poly1305` | Tier-1 KMS free-tier — `XChaCha20-Poly1305` AEAD. |
 //! | `tier-2-multi-kms`         | `tier-1-kms` + `aes-gcm` + `aes-gcm-siv` | Tier-2 production AEAD surface (implies `tier-1-kms`). |
 //! | `tier-2-aws-kms`           | `aws-sdk-kms`, `aws-config`, `tokio` | Orthogonal AWS KMS backend opt-in — `AwsKmsBackend` impl of [`hf2_kms::KmsBackend`]. |
-//! | `tier-2-hook-host-v2`      | `wasmtime`, `wasmtime-wasi` | Hook host v2 wasmtime sandbox — chain-affecting compute path (spec §14.5 / E14.L2-Allow). |
-//! | `tier-2-observer-host-v2`  | `wasmtime`, `wasmtime-wasi` | Observer host v2 wasmtime sandbox — chain-non-affecting side-effect path (spec §14.5.1 / E15). |
-//! | `pqc-hybrid`               | — | Reserved for L2 MlDsa65 + hybrid attestation (preview scaffolding — no direct `ml-dsa` dep yet; L0 kernel WAL chain signing is unaffected). |
-//! | `unstable`                 | — | Opt-in for items outside the stable surface. |
+//! | `tier-2-hook-host-v2`      | `wasmtime`, `wasmtime-wasi` | Hook host v2 wasmtime sandbox — chain-affecting compute path (E14.L2-Allow). |
+//! | `tier-2-observer-host-v2`  | `wasmtime`, `wasmtime-wasi` | Observer host v2 wasmtime sandbox — chain-non-affecting side-effect path (E15). |
+//! | `pqc-hybrid`               | — | L2 attestation Cargo feature flag. The L0 kernel WAL chain signing inherits Hybrid Ed25519 + ML-DSA 65 transitively via `arkhe-kernel` regardless of this flag. |
 //!
 //! Cloud KMS backends are orthogonal to the AEAD tiering — a deployment can
 //! run `tier-1-kms` AEAD with `tier-2-aws-kms` key storage, or any other

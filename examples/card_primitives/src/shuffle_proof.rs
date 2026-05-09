@@ -1,4 +1,4 @@
-//! Shuffle commit-reveal verifier — chain-hash anchoring scaffold.
+//! Shuffle commit-reveal verifier — chain-hash anchoring.
 //!
 //! ## Design contract (atomic, non-negotiable)
 //!

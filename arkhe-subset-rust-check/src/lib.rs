@@ -1,7 +1,7 @@
-//! # arkhe-subset-rust-check — R4-J Subset-Rust Purity Lint (E14.L1-Deny)
+//! # arkhe-subset-rust-check — Subset-Rust Purity Lint (E14.L1-Deny)
 //!
 //! AST-level purity check for `Action::compute` bodies (E14.L1 — Compute
-//! Determinism Closure, L1 realisation, v0.12 도입). Detects determinism-
+//! Determinism Closure, L1 realisation). Detects determinism-
 //! breaking calls — clock / RNG / I/O / FFI — and bans `unsafe` blocks
 //! inside the scanned function. Returns a list of [`PurityViolation`]s.
 //!
@@ -20,24 +20,15 @@
 //! (clock / RNG / I/O / FFI / threading), non-deterministic *operations*
 //! at L2 (FP / SIMD / wasm-side threading).
 //!
-//! ## Current shape vs the dylint cdylib path
+//! ## Crate shape
 //!
-//! Mirrors the [`arkhe-trait-default-check`] precedent: today a regular
-//! syn-based lib that runs on stable Rust, integrated via the
-//! `#[arkhe_pure]` attribute macro shipped from `arkhe-forge-macros`. A
-//! future release migrates to `dylint_linting::declare_late_lint!` +
-//! cdylib for HIR-level name resolution; this skeleton nails down the
-//! policy + visitor concept first.
-//!
-//! Stable-toolchain compatibility is the deciding factor — going dylint-
-//! native would force a nightly pin on the entire workspace, conflicting
-//! with the dual-feature gate. The `#[arkhe_pure]` macro path catches
-//! violations at every `cargo check`, which is the strongest enforcement
-//! posture available without bifurcating the toolchain. Coverage assertion
+//! Mirrors the `arkhe-trait-default-check` precedent: a syn-based lib
+//! that runs on stable Rust, integrated via the `#[arkhe_pure]`
+//! attribute macro shipped from `arkhe-forge-macros`. The macro path
+//! catches violations at every `cargo check`. Coverage assertion
 //! ("every `Action::compute` has the attribute") is delegated to a
 //! separate workspace-wide scan in `arkhe-trait-default-check`.
 //!
-//! [`arkhe-trait-default-check`]: https://docs.rs/arkhe-trait-default-check
 //!
 //! ## Spec anchor
 //!
@@ -52,7 +43,7 @@ use syn::{visit::Visit, ExprPath, ExprUnsafe, ItemFn, Path};
 
 /// Purity policy — exact path deny, namespace prefix deny, and an
 /// `unsafe`-block ban. The default `deny_compute_impurity` policy covers the
-/// 4-rule MVP (Clock + RNG + I/O + FFI).
+/// 4-rule deny scope (Clock + RNG + I/O + FFI).
 ///
 /// ## Known limitation: single-ident suffix-match false-positive
 ///
@@ -104,7 +95,7 @@ impl Policy {
         }
     }
 
-    /// First-cut deny list (4-rule MVP): Clock + RNG + I/O + FFI plus
+    /// Default deny list (4 categories): Clock + RNG + I/O + FFI plus
     /// `unsafe` block ban. Future rounds may add Threading + Sync/atomic
     /// + replay hazards — non-breaking additions.
     pub fn deny_compute_impurity() -> Self {
@@ -123,9 +114,9 @@ impl Policy {
             "instant::Instant::now",
             // RNG OS-entropy paths — deterministic seeded RNGs
             // (e.g. `rand_chacha::ChaCha20Rng::seed_from_u64(42)`) are
-            // intentionally NOT banned in v0.12; cryptographer Round 2
-            // may add `from_entropy` / `from_os_rng` constructor bans
-            // once HIR-level method-call resolution lands.
+            // intentionally NOT banned (cryptographer review).
+            // `from_entropy` / `from_os_rng` constructor bans depend on
+            // HIR-level method-call resolution.
             "rand::random",
             "rand::thread_rng",
             "rand::rngs::OsRng",
@@ -219,7 +210,7 @@ impl<'ast, 'p> Visit<'ast> for PurityVisitor<'p> {
     /// Match path expressions like `std::time::Instant::now` (when used
     /// as a function reference) and `std::time::UNIX_EPOCH` (constant
     /// access). Method-call form (`receiver.method()`) is intentionally
-    /// not handled in the v0.12 first cut — it would require HIR-level
+    /// not handled in this implementation — it would require HIR-level
     /// receiver-type resolution to avoid colliding with shell-defined
     /// methods of the same name (e.g. a shell type with its own `.now()`).
     /// Cryptographer review may extend the visitor with `*::method`
@@ -612,7 +603,7 @@ mod tests {
         let violations = check_purity_default(&f);
         assert!(
             violations.iter().any(|v| v.denied_path == "rand::random"),
-            "v0.12 first cut: bare-ident `random()` is a known false positive"
+            "bare-ident `random()` is a known false positive"
         );
     }
 

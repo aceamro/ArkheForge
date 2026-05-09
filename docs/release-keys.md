@@ -24,11 +24,10 @@ The Cargo features `audit-receipt-key-identified` and
 until the corresponding §1 / §3 / §5.2 prerequisites are discharged in
 the external repository. Enabling either feature only opens the type
 surface (compile-time inclusion of `ReplicaIdAllocation` /
-`AuditReceiptKeyPolicy` definitions); production emission requires a
-future emission DIP. The self-enforcing contract: future emission DIPs
-MUST land the corresponding `*-emission` sub-feature scaffold
+`AuditReceiptKeyPolicy` definitions). The self-enforcing contract:
+emission additions MUST land the corresponding `*-emission` sub-feature
 concurrently with the emission code; no emission code can land without
-the sub-feature scaffold landing in the same DIP cycle.
+the sub-feature landing in the same change.
 
 ## Canonical citation form
 

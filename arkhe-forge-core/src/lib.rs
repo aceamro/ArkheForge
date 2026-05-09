@@ -47,10 +47,10 @@ use arkhe_kernel::abi::{EntityId, InstanceId, Tick, TypeCode};
 /// ArkheForge Runtime semver triple — matches the repo release.
 pub const RUNTIME_SEMVER: (u16, u16, u16) = (0, 13, 0);
 
-/// Maximum retry count for zero-digest collision avoidance (spec §4.7).
+/// Maximum retry count for zero-digest collision avoidance.
 pub const MAX_ID_DERIVE_RETRIES: u32 = 16;
 
-/// Deterministic entity-id derivation (spec §4.7). Pure — no hidden state.
+/// Deterministic entity-id derivation. Pure — no hidden state.
 ///
 /// Given a 256-bit non-exportable `world_seed`, a per-runtime `instance_id`,
 /// the primitive's `type_code`, and the spawning `tick` / `seq`, returns a

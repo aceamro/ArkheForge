@@ -1,4 +1,4 @@
-//! L2 idempotency-key dedup service (spec §14.8 / §3.3).
+//! L2 idempotency-key dedup service.
 //!
 //! Primary production path: PG UNIQUE INDEX on the `idempotency_keys`
 //! projection table. This module ships the trait surface plus an

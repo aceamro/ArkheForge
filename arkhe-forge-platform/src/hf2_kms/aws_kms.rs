@@ -4,7 +4,7 @@
 //! so [`AwsKmsBackend`] owns a dedicated single-thread `tokio` runtime and
 //! bridges each synchronous [`KmsBackend`] call to the async SDK via
 //! `Handle::block_on`. The sync trait contract is preserved for all
-//! L2 coordinators (spec §14.11.2 backend boundary).
+//! L2 coordinators (KMS backend boundary).
 //!
 //! # What this module does not do
 //!
@@ -218,7 +218,7 @@ impl KmsBackend for AwsKmsBackend {
             // date into a BLAKE3 attestation payload so downstream consumers
             // can cross-reference the destruction event without a live API
             // round-trip. Production setups layer Ed25519 HSM signing on top
-            // via a separate attestation service (spec §14.11.3).
+            // via a separate attestation service.
             let key_id = out.key_id.unwrap_or_default();
             let deletion_ts = out.deletion_date.map(|d| d.secs()).unwrap_or_default();
             let mut h = blake3::Hasher::new();
@@ -255,7 +255,7 @@ impl KmsBackend for AwsKmsBackend {
 }
 
 /// Kind of KEK AWS KMS should create for [`generate_dek`]. The runtime always
-/// requests AES-256 since DEKs are 32-byte AEAD keys (spec §14.9.1 §§3).
+/// requests AES-256 since DEKs are 32-byte AEAD keys.
 #[allow(dead_code)]
 const _KEY_SPEC: KeySpec = KeySpec::SymmetricDefault;
 

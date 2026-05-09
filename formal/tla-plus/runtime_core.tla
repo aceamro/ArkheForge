@@ -2,12 +2,12 @@
 (*
  * runtime_core — base module for ArkheKernel Runtime formal verification.
  *
- * DIP-N5 cycle plan Track E sub-step E.1 (scaffold). Declares the abstract
- * state vector + CONSTANTS shared across the CR-1, CR-2, CR-3, CR-4, and
- * R4-I refinement modules. Each refinement module EXTENDs runtime_core
+ * Base module declaring the abstract state vector + CONSTANTS shared
+ * across the CR-1, CR-2, CR-3, CR-4, and R4-I refinement modules. Each
+ * refinement module EXTENDs runtime_core
  * and adds its module-specific invariant set.
  *
- * Anchored to runtime-book/src/en/architecture/11-axioms.md (E1-E15).
+ * Anchored to E1-E15 axioms in the runtime architecture documentation.
  * Apalache primary tooling per formal/tla-plus/README.md.
  *)
 

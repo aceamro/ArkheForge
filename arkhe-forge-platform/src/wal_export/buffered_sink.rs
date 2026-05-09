@@ -170,7 +170,7 @@ impl<W: Write> BufferedWalSink<W> {
     /// shorter than the seq field's varint encoding, ie. the bytes
     /// were truncated mid-record).
     ///
-    /// **L0 schema coupling — DO NOT TOUCH #8 sentinel**: this
+    /// **L0 schema coupling — DO NOT TOUCH #7 sentinel**: this
     /// function depends on `WalRecord` declaring `seq: u64` as its
     /// FIRST field. postcard encodes structs field-by-field in
     /// declaration order, so the first `take_from_bytes::<u64>` of
@@ -179,7 +179,7 @@ impl<W: Write> BufferedWalSink<W> {
     /// fields, the bridging test
     /// `walrecord_leading_seq_invariant_bridge` (in `round_trip_tests`)
     /// fails before any production wire damage occurs. The L0
-    /// invariant is `arkhe_kernel`'s "DO NOT TOUCH #8" anchor —
+    /// invariant is `arkhe_kernel`'s "DO NOT TOUCH #7" anchor —
     /// Runtime layer holds this `pub(super)` accessor so the bridge
     /// test can verify the coupling without exposing the function to
     /// crate-external consumers.

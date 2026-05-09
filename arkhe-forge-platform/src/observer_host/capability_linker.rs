@@ -39,7 +39,7 @@
 //! ## Why both pre-scan + link-time + call-time
 //!
 //! The three layers are not redundant — each catches a different
-//! attack shape (spec §5.5 confused-deputy observer-side mirror):
+//! attack shape (confused-deputy observer-side mirror):
 //!
 //! | Layer       | Catches                                            |
 //! |-------------|----------------------------------------------------|

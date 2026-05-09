@@ -11,10 +11,8 @@ Correctness) layers on top, the L0 kernel's Hybrid Ed25519 + ML-DSA 65 WAL
 chain signing is inherited unchanged, and a WASM-sandboxed hook host with
 a Kani-verified host-fn boundary makes ArkheForge a production runtime
 stack for shell authors (BBS, game, social platform) building on a sealed
-deterministic substrate. Forge L2's own attestation surfaces (KMS journal,
-audit receipts, manifest declaration) emit Ed25519 by default; the
-`pqc-hybrid` feature flag is preview scaffolding and the `ml-dsa-65` /
-`hybrid` manifest values are reserved for a follow-up release.
+deterministic substrate. Forge L2 attestation surfaces (KMS journal,
+audit receipts, manifest declaration) emit Ed25519.
 
 ## Quick start
 
@@ -111,7 +109,7 @@ showdown is written to a WAL file" with audit-grade integrity.
 +------------------+---------------------+
 |  L0 (sibling)  ArkheKernel deterministic|  bit-identical replay,
 |                microkernel              |  Hybrid PQC chain,
-|                (separate repo)          |  Layer A 8 invariants
+|                (separate repo)          |  Layer A 7 invariants
 +----------------------------------------+
 ```
 
@@ -197,10 +195,10 @@ reviewed):
 | Tier-2 | Multi-KMS + threshold HSM    | Multi-region, auto-promote                |
 
 Cloud backends are independent of AEAD tiering — a deployment can mix
-`tier-1-kms` AEAD with `tier-2-aws-kms` key storage. The Auto
-Promote Trust Model (planned, multi-channel health-checks + threshold
-HSM quorum for promoting standby key material under operator policy)
-ships in a follow-up release.
+`tier-1-kms` AEAD with `tier-2-aws-kms` key storage. The Auto Promote
+Trust Model design (multi-channel health-checks + threshold HSM
+quorum for promoting standby key material under operator policy) is
+sketched in `arkhe-forge-platform::hf2_kms`.
 
 ## Formal verification
 

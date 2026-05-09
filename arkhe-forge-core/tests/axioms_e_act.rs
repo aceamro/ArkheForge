@@ -1,4 +1,4 @@
-//! Axiom harness for E-act-1..7 (spec §4.5 / §11.5).
+//! Axiom harness for E-act-1..7.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Compute-level machine-checked**: E-act-5 (self-loop reject in
@@ -57,7 +57,7 @@ fn base_record() -> ActivityRecord {
 
 /// **E-act-1 (MC / C2)** — at most one Active `(actor, verb, target.key())`
 /// record. The skeleton surfaces the `TargetKey` constructor; the L2
-/// BTreeMap dedup wiring lands in a future release. Spec §4.5.
+/// BTreeMap dedup wiring is sketched at the trait level..
 #[test]
 fn e_act_1_target_key_distinguishes_kind_and_target_shell() {
     let shell_a = ShellId([0xAA; 16]);
@@ -75,7 +75,7 @@ fn e_act_1_target_key_distinguishes_kind_and_target_shell() {
 /// shell. Submit-site gets compile-time proof through `ShellBrand<'s>`;
 /// the replay / admin path runs a `ctx.authenticated_actor_shell` vs
 /// `target.shell_id` MC. This release pins the brand plumbing and the
-/// Extension-target dual-check via `EntityShellId`. Spec §4.5.
+/// Extension-target dual-check via `EntityShellId`..
 #[test]
 fn e_act_2_entity_shell_id_marker_has_immutable_type_code() {
     // E-act-7 reinforces E-act-2: EntityShellId pins the Extension target's
@@ -90,7 +90,7 @@ fn e_act_2_entity_shell_id_marker_has_immutable_type_code() {
 
 /// **E-act-3 (TYPE-ADJACENT)** — `extra_bytes` is runtime-opaque. A format
 /// change mandates a new `VerbCode`; the runtime does not decode the
-/// payload. Spec §4.5.
+/// payload..
 #[test]
 fn e_act_3_extra_bytes_passthrough() {
     let payload: &[u8] = b"shell-defined opaque blob 123";
@@ -106,7 +106,7 @@ fn e_act_3_extra_bytes_passthrough() {
 /// **E-act-4 (MC / C2)** — retract is a tombstone. `status` transitions to
 /// `Retracted { at }` and the idempotency index entry is removed. The
 /// skeleton surfaces the status enum; a future release wires the BTreeMap
-/// delta. Spec §4.5.
+/// delta..
 #[test]
 fn e_act_4_activity_status_has_active_and_retracted_variants() {
     let active = ActivityStatus::Active;
@@ -123,7 +123,7 @@ fn e_act_4_activity_status_has_active_and_retracted_variants() {
 
 /// **E-act-5 (MC)** — self-loop rejection + meta-verb depth ≤
 /// `manifest.moderation.appeal_max_depth` (1..=8, default 2). Runtime hard
-/// cap 8. Spec §4.5.
+/// cap 8..
 #[test]
 fn e_act_5_appeal_depth_hard_cap() {
     assert_eq!(APPEAL_MAX_DEPTH_CAP, 8);
@@ -139,7 +139,7 @@ fn e_act_5_appeal_depth_hard_cap() {
 
 /// **E-act-6 (MC)** — mutex verb groups (Like ↔ Dislike) declared in shell
 /// manifest. Surfaces the verb-code partitioning (canonical vs
-/// shell-extensible ranges). Spec §4.5.
+/// shell-extensible ranges)..
 #[test]
 fn e_act_6_verb_code_range_partitioning() {
     let like = VerbCode::canonical(canonical_verbs::LIKE);
@@ -152,7 +152,7 @@ fn e_act_6_verb_code_range_partitioning() {
 /// **E-act-7 (MC)** — `EntityShellId` is immutable after first
 /// `SetComponent`. Prevents an adversary from re-tagging an Extension target
 /// to a different shell (E-act-2 / C1 defense-in-depth). Pins the
-/// Component wire contract. Spec §4.5.
+/// Component wire contract..
 #[test]
 fn e_act_7_entity_shell_id_component_pinned() {
     assert_eq!(EntityShellId::TYPE_CODE, 0x0003_0402);
@@ -197,7 +197,7 @@ fn retract_activity_compute_no_op_skeleton() {
 /// `preview_next_id_for::<ActivityRecord>` yields the `EntityId` the
 /// upcoming spawn will produce; when the action's target is an
 /// `Activity(same_id)`, compute must reject before any `Op` is pushed.
-/// Spec §4.5 E-act-5.
+/// E-act-5 invariant.
 #[test]
 fn e_act_5_self_loop_compute_rejects() {
     use arkhe_forge_core::context::ActionContext;
@@ -231,7 +231,7 @@ fn e_act_5_self_loop_compute_rejects() {
 /// **E-act-7 (compute-MC)** — `EntityShellId` is immutable after the first
 /// `SetComponent`. A compute path that observes a stale-shadowed shell via
 /// `staged_read` and prepares a SetComponent with a different shell must
-/// surface `ActionError::EntityShellIdReassign`. Spec §4.5 / §11.5.
+/// surface `ActionError::EntityShellIdReassign`.
 ///
 /// `staged_read` is the staging-aware sibling of `read`, so the test does
 /// not need an `InstanceView` mock: a same-tick `set_component` shadow is

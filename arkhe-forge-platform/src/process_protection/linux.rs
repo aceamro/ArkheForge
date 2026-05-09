@@ -137,8 +137,9 @@ mod tests {
         match proto.apply_all() {
             Ok(()) => {}
             Err(ProtectionError::SyscallFailed { op, code }) => {
-                // Container / unprivileged user 환경에서는 EPERM/ENOMEM 발생
-                // 가능 — 구체 error 로 반환되는 것 자체가 skeleton 완성의 증거.
+                // Container / unprivileged user environments may produce
+                // EPERM/ENOMEM — returning a specific error is itself
+                // evidence the implementation is complete.
                 eprintln!("apply_all reported SyscallFailed op={op} code={code}");
             }
             Err(ProtectionError::DebuggerAttached(reason)) => {

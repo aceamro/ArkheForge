@@ -1,6 +1,6 @@
 //! # arkhe-trait-default-check — Trait Default Body Semantic Change Detector
 //!
-//! Lint crate that enforces roadmap §6 Minor 1 —
+//! Lint crate that enforces the Minor-1 breaking-change rule —
 //! "a semantic change to a default-impl body is a breaking change" — in CI.
 //!
 //! ## How it works
@@ -13,20 +13,12 @@
 //! 4. Compare against the baseline (`ci/trait-default-fingerprints.txt`).
 //!    Any mismatch is treated as breaking.
 //!
-//! ## Current shape vs the dylint cdylib path
+//! ## Crate shape
 //!
-//! - **Today**: a regular library crate. Exposes the
-//!   `TraitDefaultFingerprint` struct and `hash_default_body` function. AST
-//!   fingerprint generation works, but rustc-driver integration is not yet
-//!   wired up. Used from proc-macro tests.
-//! - **Future**: convert to a `cdylib`, use
-//!   `dylint_linting::declare_late_lint!`, and integrate the `rustc_lint`
-//!   API. Invoked via `cargo dylint`.
-//!
-//! The dylint route requires a nightly toolchain and lint-driver setup,
-//! which would complicate the workspace build today. This skeleton nails
-//! down the AST-fingerprint concept first so the eventual dylint wrapper can
-//! build on it.
+//! A regular library crate that exposes the `TraitDefaultFingerprint`
+//! struct and `hash_default_body` function. AST fingerprint generation
+//! is consumed from proc-macro tests. Stable-toolchain compatible — no
+//! rustc-driver dependency.
 //!
 //! ## Single-point-of-failure (SPOF) analysis
 //!
@@ -35,14 +27,14 @@
 //!
 //! 1. **Trait default-body fingerprint** — `TraitDefaultFingerprint`
 //!    types here in `src/lib.rs` plus the proc-macro tests that
-//!    exercise them. Anchors roadmap §6 Minor 1 ("a semantic change to
+//!    exercise them. Anchors the Minor-1 rule ("a semantic change to
 //!    a default-impl body is a breaking change").
 //! 2. **`ActionCompute` workspace coverage** —
 //!    `tests/action_compute_coverage.rs` scans every workspace crate
 //!    for `impl ActionCompute for T` blocks and asserts the
 //!    `#[arkhe_pure]` attribute is present on `compute()`. Realises the
 //!    E14.L1 Subset-Rust purity invariant at workspace scope.
-//! 3. **§14.7 forward-looking event 0-emission** —
+//! 3. **Forward-looking event 0-emission** —
 //!    `tests/forward_looking_event_zero_emission.rs` scans Runtime
 //!    production source for any reference to `ReplicaIdAllocation` /
 //!    `AuditReceiptKeyPolicy` outside the two allowed files. Mechanical
@@ -97,12 +89,12 @@
 use blake3::Hasher;
 use syn::{ImplItem, ItemImpl};
 
-/// Trait impl 의 default body fingerprint.
+/// Default body fingerprint of a trait impl.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDefaultFingerprint {
-    /// Trait 이름 (e.g. `"ArkheComponent"`).
+    /// Trait name (e.g. `"ArkheComponent"`).
     pub trait_name: String,
-    /// Impl 대상 타입 (e.g. `"UserProfile"`).
+    /// Impl target type (e.g. `"UserProfile"`).
     pub impl_for: String,
     /// Method name (e.g. `"canonical_bytes"`).
     pub method_name: String,
@@ -110,11 +102,10 @@ pub struct TraitDefaultFingerprint {
     pub body_hash: String,
 }
 
-/// `ItemImpl` AST 에서 default body fingerprint 계산.
+/// Compute default body fingerprint from `ItemImpl` AST.
 ///
 /// Normalizes the body by canonicalizing the token stream's `to_string()`
-/// output (collapse runs of whitespace, strip comments). A future release
-/// extends the normalization rules.
+/// output (collapse runs of whitespace, strip comments).
 pub fn hash_default_body(item: &ItemImpl) -> Vec<TraitDefaultFingerprint> {
     let trait_name = item
         .trait_
@@ -142,7 +133,7 @@ pub fn hash_default_body(item: &ItemImpl) -> Vec<TraitDefaultFingerprint> {
     out
 }
 
-/// Canonical form — 연속 whitespace → 단일 space, leading/trailing strip.
+/// Canonical form — consecutive whitespace → single space, leading/trailing strip.
 fn normalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_ws = true; // strip leading

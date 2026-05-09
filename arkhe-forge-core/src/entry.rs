@@ -1,4 +1,4 @@
-//! Entry primitive — persistent content unit (spec §4.4).
+//! Entry primitive — persistent content unit.
 
 use arkhe_kernel::abi::{EntityId, Tick};
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ pub struct EntryBody {
     pub schema_version: u16,
     /// Optional title — bounded to 256 UTF-8 bytes.
     pub title: Option<BoundedString<256>>,
-    /// `BLAKE3(body || user_salt || entry_nonce)` (spec §14.9.1 §§4).
+    /// `BLAKE3(body || user_salt || entry_nonce)`.
     pub body_hash: [u8; 32],
     /// Cipher metadata — present iff the body plaintext is AEAD-sealed in a
     /// shell-side channel.

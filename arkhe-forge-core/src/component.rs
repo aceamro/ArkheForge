@@ -1,8 +1,8 @@
-//! `ArkheComponent` sealed trait + `BoundedString<N>` — spec §3.4.
+//! `ArkheComponent` sealed trait + `BoundedString<N>`.
 //!
 //! Components are ECS storage units. Each impl carries a stable `TYPE_CODE`
 //! (runtime registry pin, A15) and `SCHEMA_VERSION` (monotone increment on
-//! field addition; removal / reorder forbidden — see §14.7 Enum WAL compat).
+//! field addition; removal / reorder forbidden — Enum WAL compat).
 //!
 //! `BoundedString<N>` wraps `arrayvec::ArrayString<N>` so `N` is a compile-time
 //! capacity bound. The wrapper is sealed — downstream code cannot see the

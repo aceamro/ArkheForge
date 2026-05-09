@@ -1,4 +1,4 @@
-//! Axiom harness for E-actor-1..5 (spec §4.2 / §11.5).
+//! Axiom harness for E-actor-1..5.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Type-system proven**: E-actor-2, E-actor-4 — sealed `ActorState`
@@ -27,7 +27,7 @@ fn eid(v: u64) -> EntityId {
 }
 
 /// **E-actor-1 (MC)** — exactly one `ActorProfile` per Actor. The skeleton
-/// surfaces the derive-pinned wire contract. Spec §4.2.
+/// surfaces the derive-pinned wire contract.
 #[test]
 fn e_actor_1_profile_type_code_pinned() {
     assert_eq!(ActorProfile::TYPE_CODE, 0x0003_0101);
@@ -36,7 +36,7 @@ fn e_actor_1_profile_type_code_pinned() {
 
 /// **E-actor-2 (TYPE-PROVEN)** — `Actor<'_, Authenticated>` requires a
 /// `UserBinding` Component; `Actor<'_, Anonymous>` rejects binding access.
-/// Typestate forbids demotion at compile time. Spec §4.2 / §11.2.
+/// Typestate forbids demotion at compile time.
 #[test]
 fn e_actor_2_typestate_chain_consumes_self() {
     ShellBrand::run(|brand| {
@@ -55,7 +55,7 @@ fn e_actor_2_typestate_chain_consumes_self() {
 /// **E-actor-3 (MC)** — `(shell_id, handle)` is unique within a shell.
 /// The skeleton pins the field shape (`BoundedString<32>`); L2 enforcement
 /// of uniqueness via `SpawnEntity` rejection against a `(shell, handle)`
-/// index is a future release. Spec §4.2.
+/// index is sketched at the trait level.
 #[test]
 fn e_actor_3_profile_handle_is_bounded_32() {
     assert_eq!(BoundedString::<32>::CAP, 32);
@@ -65,7 +65,7 @@ fn e_actor_3_profile_handle_is_bounded_32() {
 
 /// **E-actor-4 (TYPE-PROVEN)** — an `Actor` is scoped to a single shell via
 /// the `'s` lifetime brand. Two independent `ShellBrand::run` scopes
-/// produce non-unifiable brands. Spec §4.2 / §3.7.
+/// produce non-unifiable brands.
 #[test]
 fn e_actor_4_brand_scope_encapsulation() {
     let a = ShellBrand::run(|brand| {
@@ -82,7 +82,7 @@ fn e_actor_4_brand_scope_encapsulation() {
 
 /// **E-actor-5 (MC)** — `UserBinding.user_id` and `ActorProfile.shell_id`
 /// are immutable after creation. The skeleton pins the wire contract; the
-/// L0 bridge (future release) rejects `SetComponent` re-apply. Spec §4.2.
+/// L0 bridge rejects `SetComponent` re-apply.
 #[test]
 fn e_actor_5_immutable_fields_pinned_in_wire_shape() {
     let profile = ActorProfile {
@@ -111,7 +111,7 @@ fn e_actor_5_immutable_fields_pinned_in_wire_shape() {
 /// A5 succession) and hands a `&dyn ActorHandleIndex` to the
 /// `ActionContext` before dispatch. Compute consults the index via
 /// `actor_by_handle` and surfaces `ActionError::ActorHandleCollision`
-/// when the handle is already taken. Spec §4.2 / §11.5.
+/// when the handle is already taken.
 #[test]
 fn e_actor_3_handle_collision_compute_rejects() {
     /// Mock backed by a flat list — sufficient for the gate's contract

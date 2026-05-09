@@ -12,7 +12,7 @@
 //! ## Compile-time validation
 //!
 //! * `#[arkhe(type_code = N)]` mandatory; `N` must lie in the appropriate
-//!   spec §3.2 sub-range (or the shell-scoped extension range).
+//!   reserved sub-range (or the shell-scoped extension range).
 //! * First named struct field must be `schema_version: u16` (wire version tag).
 //! * `#[arkhe(band = K)]` mandatory for `ArkheAction`; `K ∈ {1, 2, 3}`.
 //! * `#[arkhe(idempotent)]` opt-in on `ArkheAction` — requires the struct

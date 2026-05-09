@@ -19,9 +19,9 @@
 #   cargo vet certify <crate>    # add a new audit entry (interactive)
 #
 # This repo audits 5 crypto-critical primitives directly. All five sit on
-# the spec §14.9.1 §§1-§§5 envelope-encryption path or the §12.4
-# chain_tip_signature path — they are always present in the runtime
-# binary, so the criteria is `safe-to-deploy`.
+# the envelope-encryption path or the chain_tip_signature path — they
+# are always present in the runtime binary, so the criteria is
+# `safe-to-deploy`.
 #
 # ── Tiered audit policy ───────────────────────────────────────────────────
 # The `cargo vet check` policy in this repo is layered:
@@ -48,8 +48,8 @@ who      = "veteran <noreply@arkheforge.invalid>"
 version  = "2.2.0"
 criteria = "safe-to-deploy"
 notes    = """
-Core signing primitive on the spec §12.4 chain_tip_signature + §14.7
-SignatureClassPolicy + release-keys §3 path. Since v2.0 the crate
+Core signing primitive on the chain_tip_signature + SignatureClassPolicy
++ release-keys §3 path. Since v2.0 the crate
 integrates `subtle` constant-time comparisons and `zeroize`. CVE-2022-46396
 (timing oracle) was closed in v2.0. RustSec advisory DB clean. Source
 review: panic-free, no unsafe in the hot path, no FFI.
@@ -60,8 +60,8 @@ who      = "veteran <noreply@arkheforge.invalid>"
 version  = "1.8.4"
 criteria = "safe-to-deploy"
 notes    = """
-Cryptographic hash primitive used by spec §3.2 verb-allocation domain
-separator + §12.4 chain_tip_hash + §14.9.1 §§4 body_hash. Maintained
+Cryptographic hash primitive used by the verb-allocation domain
+separator + chain_tip_hash + body_hash paths. Maintained
 directly by the BLAKE3 team (J. Walton et al.). C / SIMD intrinsics are
 gated by build features; the default build is no_std + Rust-only fallback.
 RustSec advisory clean. Source review: unsafe blocks live only on the SIMD
@@ -73,10 +73,10 @@ who      = "veteran <noreply@arkheforge.invalid>"
 version  = "0.10.3"
 criteria = "safe-to-deploy"
 notes    = """
-Hardware-accelerated AEAD used by spec §14.9.1 §§3 AeadKind::Aes256Gcm.
+Hardware-accelerated AEAD used by AeadKind::Aes256Gcm.
 Maintained by the RustCrypto org (P. Skorski et al.). Constant-time GCM
 implementation backed by `subtle`. RustSec advisory clean. The
-deterministic counter-nonce policy from §§3 is enforced by the caller, not
+deterministic counter-nonce policy is enforced by the caller, not
 this crate; this audit covers the primitive only.
 """
 
@@ -85,7 +85,7 @@ who      = "veteran <noreply@arkheforge.invalid>"
 version  = "0.10.1"
 criteria = "safe-to-deploy"
 notes    = """
-Misuse-resistant AEAD used by spec §14.9.1 §§3 AeadKind::XChaCha20Poly1305
+Misuse-resistant AEAD used by AeadKind::XChaCha20Poly1305
 (default). Maintained by the RustCrypto org. The 192-bit XChaCha20 nonce
 extends the random-nonce collision boundary out to ~2^96, which aligns
 with the DEK rotation SLA. RustSec advisory clean. Constant-time +
@@ -97,8 +97,8 @@ who      = "veteran <noreply@arkheforge.invalid>"
 version  = "1.8.2"
 criteria = "safe-to-deploy"
 notes    = """
-Key-material clearing primitive used by spec §14.9.1 §§5 DEK lifecycle +
-Tier-0 process_protection §§12. Co-maintained by iqlusioninc and the
+Key-material clearing primitive used by the DEK lifecycle +
+Tier-0 process_protection paths. Co-maintained by iqlusioninc and the
 RustCrypto org. The `Zeroize` derive overwrites stack/heap secret regions
 with zeros at every drop — the implementation routes through
 `volatile_set_memory` so the LLVM optimizer cannot apply dead-store
@@ -111,7 +111,7 @@ who      = "cryptographer <noreply@arkheforge.invalid>"
 version  = "0.1.0-rc.9"
 criteria = "safe-to-deploy"
 notes    = """
-PQC Hybrid mandate (book §14.7) — NIST FIPS 204 ML-DSA 65 (Dilithium-3)
+PQC Hybrid mandate — NIST FIPS 204 ML-DSA 65 (Dilithium-3)
 post-quantum signature primitive. Paired with ed25519-dalek for Hybrid
 dual-sign (AND-mode verify) per CNSA 2.0 transition spec. Maintained by
 the RustCrypto org (signatures repo). Pre-release pin (0.1.0-rc.9) follows

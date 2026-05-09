@@ -1,5 +1,5 @@
-//! `runtime_doctor_journal` chain-signed persistence (spec §12.4, §14.11.2
-//! audit-log tamper-resistance).
+//! `runtime_doctor_journal` chain-signed persistence — audit-log
+//! tamper-resistance.
 //!
 //! Each [`JournalEntry`] links to its predecessor through a BLAKE3 chain
 //! hash and carries an Ed25519 signature over that hash; readers verify the
@@ -18,34 +18,36 @@
 //!   (YubiKey / NitroKey per `docs/release-keys.md` §3) lives outside this
 //!   module. [`InMemoryJournalSigner`] ships only for dev / unit tests.
 //! - [`PersistentJournal`] — pluggable backend trait. [`InMemoryJournal`]
-//!   is the dev impl; a future release wires [`WalBackedJournal`] against
+//!   is the dev impl; [`WalBackedJournal`] wires against
 //!   `arkhe-kernel` WAL.
 //!
-//! # `KmsBackend` 연계
+//! # `KmsBackend` integration
 //!
-//! Journal append 경로는 `KmsBackend` 내부가 아니라 **상위 coordinator**
-//! (e.g. auto_promote evaluator, crypto-erasure coordinator) 에서 호출되는
-//! 구조로 설계되었다. Sync trait 유지 + `AwsKmsBackend` 의
-//! `tokio::block_on` bridge 재진입 회피. 자세한 wiring 은 `kms_backend.rs`
-//! 계승.
+//! The journal append path lives in the **upper coordinator**, not
+//! inside `KmsBackend` (e.g. auto_promote evaluator, crypto-erasure
+//! coordinator), which calls it. This preserves the sync trait
+//! surface and avoids `AwsKmsBackend`'s `tokio::block_on` bridge
+//! re-entrance. Detailed wiring lives in `kms_backend.rs`.
 //!
-//! # Signer 주입
+//! # Signer injection
 //!
-//! Runtime process 는 private Ed25519 key material 을 **직접 보유하지
-//! 않는다** — `docs/release-keys.md` §3 의 2인 공동 보관 HW key 로부터
-//! `JournalSigner` trait object 를 주입받는다. Production signer
-//! (`YubiKeyJournalSigner`) 는 향후 릴리스에서 구현 — 현재는
-//! `InMemoryJournalSigner` 가 dev 경로만 커버한다.
+//! The runtime process **does not directly hold** private Ed25519
+//! key material — a `JournalSigner` trait object is injected from
+//! the 2-person co-custody HW key described in
+//! `docs/release-keys.md` §3. The trait keeps backend selection
+//! orthogonal: `InMemoryJournalSigner` covers the dev path,
+//! HW-backed signers (e.g. `YubiKeyJournalSigner`) plug in via the
+//! same trait.
 
 use blake3::derive_key;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 /// BLAKE3 domain separator for journal chain hashing. Registered in spec
-/// `Runtime BLAKE3 domain string list` (§14.7 m4 canonical / §3.2 mirror);
-/// `runtime_doctor_journal` chain hash cross-ref in §12.4.
+/// `Runtime BLAKE3 domain string list` (canonical mirror);
+/// `runtime_doctor_journal` chain hash cross-ref.
 pub const JOURNAL_CHAIN_DOMAIN: &str = "arkhe-runtime-doctor-journal-chain";
 
-/// Genesis `prev_hash` — 첫 entry 는 zero prev_hash 를 가진다.
+/// Genesis `prev_hash` — the first entry uses a zero prev_hash.
 pub const GENESIS_PREV_HASH: [u8; 32] = [0u8; 32];
 
 /// Consumed Shamir authorization token — the audit payload.
@@ -116,7 +118,7 @@ pub trait JournalSigner: Send + Sync {
 /// Dev-only signer backed by an in-process `SigningKey`. **Production**:
 /// replace with a HW-backed signer (e.g. `YubiKeyJournalSigner`) so private
 /// key material never enters the process address space
-/// (`docs/release-keys.md` §3 / spec §14.11.3).
+/// (`docs/release-keys.md` §3).
 pub struct InMemoryJournalSigner {
     key: SigningKey,
 }
@@ -152,22 +154,22 @@ impl JournalSigner for InMemoryJournalSigner {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JournalError {
-    /// 동일 token 재사용 탐지 — replay attack.
+    /// Same-token reuse detected — replay attack.
     #[error("duplicate token consume attempt")]
     DuplicateToken,
-    /// Chain hash 재계산 결과 불일치 — tamper detected.
+    /// Chain hash recomputation mismatch — tamper detected.
     #[error("journal chain integrity violation at entry {index}")]
     ChainIntegrity {
         /// 0-based index of the first failing entry.
         index: usize,
     },
-    /// Ed25519 signature 검증 실패.
+    /// Ed25519 signature verification failed.
     #[error("journal signature invalid at entry {index}")]
     SignatureInvalid {
         /// 0-based index of the first failing entry.
         index: usize,
     },
-    /// Backend I/O 오류 — WAL-backed 경로가 future 에서 사용.
+    /// Backend I/O error — used by the WAL-backed path.
     #[error("journal backend error: {0}")]
     BackendIo(String),
 }
@@ -207,10 +209,10 @@ pub trait PersistentJournal {
 }
 
 /// Marker trait for WAL-backed journal impls — the real `arkhe-kernel`
-/// WAL integration lands in a future release. Tier-1 operators use
-/// [`InMemoryJournal`] only for dev / single-node alpha.
+/// WAL integration routes through `WalBackedJournal`. Tier-1 operators
+/// use [`InMemoryJournal`] for dev / single-node deployments.
 pub trait WalBackedJournal: PersistentJournal {
-    // Placeholder — future release adds `persist_to_wal(...)` +
+    // Stub — `WalBackedJournal` adds `persist_to_wal(...)` +
     // `reconstruct_from_wal(...)` surface when L0 WAL exposes the hook.
 }
 
@@ -296,7 +298,7 @@ impl PersistentJournal for InMemoryJournal {
 }
 
 /// Backward-compatible alias — other modules (e.g. `threshold.rs`
-/// module-doc) 가 여전히 이 이름을 참조한다.
+/// module-doc) still references this name.
 pub type ConsumedTokenJournal = InMemoryJournal;
 
 #[cfg(test)]

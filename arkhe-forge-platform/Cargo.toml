@@ -30,7 +30,7 @@ toml                = { workspace = true }
 # forward.
 static_assertions   = { workspace = true }
 
-# Spec §14.9.1 Compliance Tier — activated from Tier-1 upward.
+# Compliance Tier — activated from Tier-1 upward.
 argon2              = { workspace = true, optional = true }
 chacha20poly1305    = { workspace = true, optional = true }
 aes-gcm             = { workspace = true, optional = true }
@@ -45,8 +45,7 @@ getrandom           = { version = "0.2", default-features = false, features = ["
 
 # Tier-2 AWS KMS backend — opt-in via `tier-2-aws-kms`. The async-only
 # `aws-sdk-kms` is bridged to the sync `KmsBackend` trait through an
-# `AwsKmsBackend`-owned `tokio` current-thread runtime (spec §14.11.2
-# backend boundary). `aws-config` provides the credential loader.
+# `AwsKmsBackend`-owned `tokio` current-thread runtime. `aws-config` provides the credential loader.
 aws-sdk-kms         = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
 aws-config          = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
 tokio               = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"], optional = true }
@@ -55,11 +54,11 @@ tokio               = { version = "1", default-features = false, features = ["rt
 # sandbox embedding. Both hosts share the wasmtime runtime; Cargo dedup
 # pulls the dep once when either feature is enabled.
 #
-# - Hook host v2 (spec §14.5 / E14.L2-Allow) — chain-affecting compute
+# - Hook host v2 (E14.L2-Allow) — chain-affecting compute
 #   path; pinned NaN canonicalisation + SIMD off + 10 ms fuel budget +
 #   `arkhe:hook/{state, emit, fuel}` ALLOW; `wasi:random/*` /
 #   `wasi:clocks/*` DENY.
-# - Observer host v2 (spec §14.5.1 / E15) — chain-non-affecting
+# - Observer host v2 (E15) — chain-non-affecting
 #   side-effect path; fuel-metering only (no determinism axes pinned —
 #   observer execution does not contribute to the chain hash) +
 #   `arkhe:observer/*` capability-token allow set + same WASI deny.
@@ -70,7 +69,7 @@ wasmtime            = { version = "~43.0.1", default-features = false, features 
 wasmtime-wasi       = { version = "~43.0.1", default-features = false, optional = true }
 
 [features]
-# Feature flag surface (spec §4 boundary).
+# Feature flag surface.
 default          = []                                             # Tier-0 dev only
 tier-1-kms       = ["argon2", "chacha20poly1305"]                 # Tier-1 KMS free-tier
 tier-2-multi-kms = ["tier-1-kms", "aes-gcm", "aes-gcm-siv"]       # Tier-2 production AEAD surface
@@ -78,20 +77,19 @@ tier-2-multi-kms = ["tier-1-kms", "aes-gcm", "aes-gcm-siv"]       # Tier-2 produ
 # own `tier-2-<vendor>-kms` flag so operators can select exactly the backends
 # they need. The `KmsBackend` trait + `MockKmsBackend` are always available.
 tier-2-aws-kms   = ["aws-sdk-kms", "aws-config", "tokio"]
-# Tier-2 Hook host v2 — opt-in wasmtime + WASI preview-2 sandbox (spec
-# §14.5 / E14.L2-Allow runtime enforcement). Tier-0 / Tier-1 deployments
+# Tier-2 Hook host v2 — opt-in wasmtime + WASI preview-2 sandbox
+# (E14.L2-Allow runtime enforcement). Tier-0 / Tier-1 deployments
 # stay on `NoopHookHost`; Tier-2 enables the wasmtime-backed sandbox.
 tier-2-hook-host-v2 = ["wasmtime", "wasmtime-wasi"]
 # Tier-2 Observer host v2 — opt-in wasmtime + WASI preview-2 sandbox
-# (spec §14.5.1 / E15 Observer Capability Confinement). Independent of
+# (E15 Observer Capability Confinement). Independent of
 # `tier-2-hook-host-v2`: Tier-2 deployments may enable just the hook
 # sandbox, just the observer sandbox, or both. Tier-0 / Tier-1 stay on
-# `NoopObserverHost` (v1 alpha pass-through).
+# `NoopObserverHost` (v1 pass-through).
 tier-2-observer-host-v2 = ["wasmtime", "wasmtime-wasi"]
-pqc-hybrid       = []                                             # MlDsa65 + hybrid signing (preview)
-unstable         = []                                             # pre-freeze API opt-in
+pqc-hybrid       = []                                             # MlDsa65 + hybrid signing
 
-# Platform FFI for `process_protection` (spec §14.9.1 §§12).
+# Platform FFI for `process_protection`.
 # Linux + macOS share the libc surface (mlockall / prctl / setrlimit / ptrace);
 # Windows ships windows-sys with the Win32 subsystems we actually call.
 [target.'cfg(target_os = "linux")'.dependencies]

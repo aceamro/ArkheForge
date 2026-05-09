@@ -1,6 +1,6 @@
 //! Multi-KMS infrastructure — health + threshold HSM + KMS abstraction.
 //!
-//! Mitigates spec §14.11.2 / §14.11.3 actor 5 (HSM operator collusion).
+//! Mitigates the HSM operator collusion threat (actor 5).
 //! Submodules:
 //!
 //! - [`health`] — multi-channel health check (DoH / alternate region /

@@ -45,7 +45,6 @@ proptest! {
 ## Documentation
 
 - Runtime book: <https://aceamro.github.io/ArkheForge/>
-- API reference: <https://docs.rs/arkhe-runtime-testkit>
 - Repository: <https://github.com/aceamro/ArkheForge>
 
 ## License

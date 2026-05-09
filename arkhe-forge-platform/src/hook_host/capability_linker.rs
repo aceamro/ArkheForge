@@ -38,7 +38,7 @@
 //! | Call-time   | Linked host-fn called without per-invocation grant |
 //!
 //! Belt-and-braces is appropriate for the supply-chain trust boundary
-//! (spec §5.3 confused-deputy).
+//! (confused-deputy mitigation).
 
 use std::collections::{BTreeMap, BTreeSet};
 

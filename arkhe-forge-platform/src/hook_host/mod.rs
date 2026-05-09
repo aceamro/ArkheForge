@@ -1,7 +1,6 @@
-//! Hook host — pre-submit capability-bounded extension point (spec
-//! §5.3 / §14.5).
+//! Hook host — pre-submit capability-bounded extension point.
 //!
-//! ## Hook contract (spec §5.3)
+//! ## Hook contract
 //!
 //! Submit-side execution order:
 //!
@@ -35,8 +34,8 @@
 //! - **E14 Compute Determinism Closure** — paired E14.L1-Deny
 //!   (build-time AST deny-list) + E14.L2-Allow (runtime host-import
 //!   allow-list, this module).
-//! - **Hook-host 3-tier ingestion** — BLAKE3 digest pin + scaffold for
-//!   sigstore + cargo-vet attestation tiers (see
+//! - **Hook-host 3-tier ingestion** — BLAKE3 digest pin (sigstore +
+//!   cargo-vet attestation tiers route through
 //!   [`wasmtime_host::HookAttestationVerifier`]).
 
 use bytes::Bytes;
@@ -87,7 +86,7 @@ impl ExtraBytesBuilder {
 /// whitelisted imports are rejected at module-load (E14.L2-Allow
 /// enforcement).
 ///
-/// `#[non_exhaustive]` — additive expansion is non-breaking (spec §3.2
+/// `#[non_exhaustive]` — additive expansion is non-breaking (TypeCode
 /// forward-compat). `Ord`/`PartialOrd` are required so `CapToken` can
 /// live in a deterministic [`std::collections::BTreeSet`] (the
 /// `HookStoreData::capabilities` container — deterministic iteration
@@ -178,7 +177,7 @@ pub trait HookHost {
 }
 
 /// Pass-through host — returns `Ok(())` without mutating extra bytes.
-/// The §5.3 diagram's "Hook host" box runs this implementation when
+/// The Hook host box in the contract diagram runs this implementation when
 /// the runtime is not configured for sandbox-backed hooks.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopHookHost;
@@ -232,7 +231,7 @@ mod tests {
         // Each currently-shipped `CapToken` variant is reachable + has
         // a stable `Debug` discriminator. External crates must wildcard
         // because the enum is `#[non_exhaustive]` (additive expansion
-        // is non-breaking — see spec §3.2).
+        // is non-breaking — see TypeCode reservation policy).
         let tokens = [
             CapToken::StateRead,
             CapToken::StateWrite,

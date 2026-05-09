@@ -51,7 +51,7 @@ use crate::user::{GdprStatus, UserId, UserProfile};
 /// `(EntityId, Tick)` assignments.
 ///
 /// `arkhe-forge-platform::dedup` ships an in-memory implementation; the
-/// production path swaps in a PG-UNIQUE-INDEX-backed impl (spec §14.8).
+/// production path swaps in a PG-UNIQUE-INDEX-backed impl.
 /// The L0 kernel may layer a WAL-scan fallback underneath the same trait.
 pub trait IdempotencyIndex: Send + Sync {
     /// Look up a prior assignment of `key`. `None` indicates the key is
@@ -60,7 +60,7 @@ pub trait IdempotencyIndex: Send + Sync {
 }
 
 /// L2-provided `(shell_id, handle) → ActorId` index, backing E-actor-3
-/// uniqueness enforcement (spec §4.2).
+/// uniqueness enforcement.
 ///
 /// `InstanceView::component(...)` is keyed by `EntityId`, so the runtime
 /// cannot scan for an Actor by `(shell, handle)` directly. The L2 layer
@@ -107,7 +107,7 @@ pub enum ActionError {
     CrossShellActivity,
 
     /// User has `ErasurePending` GDPR status; actor-originated Actions are
-    /// blocked until the cascade completes (spec §3.3 C3).
+    /// blocked until the cascade completes (C3 contract).
     #[error("GDPR policy violation")]
     GdprPolicyViolation,
 
@@ -133,7 +133,7 @@ pub enum ActionError {
     /// E-act-7 — an Action attempted to overwrite an entity's existing
     /// `EntityShellId` with a different shell. The runtime refuses the
     /// reassignment to defend against type-erased-id brand bypass (spec
-    /// §4.5 / E-act-2 Extension MC).
+    /// E-act-2 Extension MC).
     #[error("EntityShellId reassign rejected for {entity:?}: {old_shell:?} → {new_shell:?}")]
     EntityShellIdReassign {
         /// Target entity.
@@ -146,7 +146,7 @@ pub enum ActionError {
 
     /// E-actor-3 — `(shell_id, handle)` is already held by another Actor.
     /// Spawning or renaming with a colliding handle is rejected (spec
-    /// §4.2 invariant E-actor-3).
+    /// E-actor-3 invariant).
     #[error("actor handle collision in shell {shell_id:?}: {handle:?}")]
     ActorHandleCollision {
         /// Shell scope of the collision.
@@ -196,7 +196,7 @@ pub struct ActionContext<'i> {
 
 impl<'i> ActionContext<'i> {
     /// Construct a fresh context. The `world_seed` is a non-exportable
-    /// L0 configuration secret (spec §4.7); tests may pass any fixed
+    /// L0 configuration secret; tests may pass any fixed
     /// 32-byte value.
     #[must_use]
     pub fn new(
@@ -246,7 +246,7 @@ impl<'i> ActionContext<'i> {
 
     /// Attach an [`ActorHandleIndex`] backend — enables
     /// [`ActionContext::actor_by_handle`] to enforce E-actor-3 uniqueness
-    /// (spec §4.2). Without this call `actor_by_handle` always returns
+    /// Without this call `actor_by_handle` always returns
     /// `None`, so handle-collision rejection only fires when an L2
     /// implementation is bound.
     #[inline]
@@ -333,7 +333,7 @@ impl<'i> ActionContext<'i> {
 
     /// Spawn a fresh entity in the namespace of `C`. Allocates an
     /// `EntityId` via [`ActionContext::next_id`] using `C::TYPE_CODE` as
-    /// the id-derivation namespace (spec §4.7), and pushes a matching
+    /// the id-derivation namespace, and pushes a matching
     /// `Op::SpawnEntity` into the accumulator.
     ///
     /// The component itself is **not** attached here — follow with
@@ -403,9 +403,9 @@ impl<'i> ActionContext<'i> {
 
     /// Idempotency-key lookup. Consults the attached `IdempotencyIndex`
     /// (see [`ActionContext::with_idempotency_index`]) if one is bound;
-    /// otherwise returns `None` for forward-compat (spec §3.3).
+    /// otherwise returns `None` for forward-compat.
     ///
-    /// The production path uses PG UNIQUE INDEX (spec §14.8); the L0
+    /// The production path uses PG UNIQUE INDEX; the L0
     /// kernel may layer a WAL-scan fallback beneath the same interface.
     #[inline]
     #[must_use]
@@ -413,7 +413,7 @@ impl<'i> ActionContext<'i> {
         self.idempotency_index.and_then(|idx| idx.lookup(key))
     }
 
-    /// Read a component from the attached `InstanceView` (spec §3.3 NC2).
+    /// Read a component from the attached `InstanceView` (NC2 contract).
     ///
     /// Returns:
     /// * `Ok(Some(component))` — the view is bound and the component was

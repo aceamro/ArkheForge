@@ -1,6 +1,6 @@
 ---- MODULE r4_implementation_refinement ----
 (*
- * r4_implementation_refinement — DIP-N5 sub-step E.6.
+ * r4_implementation_refinement — implementation refinement of E3 cross-layer 3-tier.
  *
  * R4-I anchors E3 (Runtime → L0 strictly downward, L1 → L2 forbidden)
  * + E8 (Entry/Space parent DAG cycle-free + depth ≤ 64) + E9 (Activity
@@ -22,30 +22,31 @@
  *   - E9-MetaVerbDepthBounded (MC, hard cap 8)
  *
  * Scope: L0 + L1 + L2 cross-layer 3-tier hierarchy (E3 axiom
- * refinement, v0.12 sealing scope per `runtime-book/src/en/
- * architecture/02-layers.md` §2.1 + §2.2 — L1+L2 marked "this
+ * refinement, the 3-tier sealing scope per the runtime architecture
+ * layer specification — L1+L2 marked "this
  * DIP scope", L3+ marked "Out of scope"). L3 (Library/ECS) is
  * declared in `book/src/en/architecture/domain-spec.md` §"Layer
- * distinctions" but explicitly out-of-scope at v0.12 per
- * 02-layers.md §2.2 — application-domain layer with no v0.12
+ * distinctions" but explicitly out-of-scope at this scope per
+ * application-domain layer with no
  * invariant requirement.
  *
  * Distinction from R4-X (`book/src/en/appendix/decisions.md` R4-X):
  * R4-X anchors the L0 kernel INTERNAL 4-stratum DAG (`abi → state
  * → runtime → persist`, single-crate intra-module DAG enforced by
- * cargo-modules CI gate at L0 build time). R4-I refines E3
- * cross-layer 3-tier — different abstraction level, not a
- * refinement of R4-X. R4-X citations elsewhere in this rustdoc
- * anchor R4-X as a sibling concept (L0-internal sealing axis),
- * not as the source axiom of `LayerImportStrictlyDownward`. R4-X
- * is Layer A DO NOT TOUCH item 6 (L0 sealed, runtime-book §16
- * references) — preserved verbatim, sealed at the L0 build-time
- * gate. The TLA+ refinement here captures the abstract E3
- * cross-layer invariant that the cargo-modules CI gate enforces
- * at build time.
+ * Rust `pub(crate)` module visibility + non-cyclic intra-crate
+ * import graph at L0 build time). R4-I refines E3 cross-layer
+ * 3-tier — different abstraction level, not a refinement of R4-X.
+ * R4-X citations elsewhere in this rustdoc anchor R4-X as a sibling
+ * concept (L0-internal sealing axis), not as the source axiom of
+ * `LayerImportStrictlyDownward`. R4-X is Layer A DO NOT TOUCH
+ * item 5 (L0 sealed, runtime architecture references) — preserved
+ * verbatim, sealed at the L0 build-time boundary. The TLA+
+ * refinement here captures the abstract E3 cross-layer invariant
+ * that the Rust compiler enforces via `pub(crate)` visibility +
+ * non-cyclic import graph at build time.
  *
  * Space coverage note: E8 spec body covers Entry/Space parent DAGs
- * symmetrically. The TLA+ catalog (README.md §11.3) records E8 as
+ * symmetrically. The TLA+ catalog records E8 as
  * `EntryParentDagDepthBounded` + `EntryParentDagAcyclic` —
  * Space.parent_space follows the same pattern with identical
  * structural form (parent_space: SpaceIds ∪ {NONE} + depth ≤ 64 +
@@ -59,7 +60,7 @@
  * via `TypeOK /\ ...` (E.4 + E.5 carry-forward confirmed).
  *
  * Anchored to:
- *   - runtime-book/src/en/architecture/11-axioms.md E3, E8, E9
+ *   - runtime architecture E3, E8, E9 axioms
  *   - book/src/en/appendix/decisions.md R4-X
  *
  * Apalache primary tooling. CI: `apalache-mc typecheck` per .tla.
@@ -195,8 +196,9 @@ TypeOK_R4 ==
 \* Every recorded layer import goes strictly downward in LayerOrder.
 \* L1 → L0 OK (LayerOrder L0=0 < L1=1); L2 → L1 OK (1 < 2); L2 → L0
 \* OK (0 < 2). L0 → anything FORBIDDEN (L0 sealed). L1 → L2
-\* FORBIDDEN per E3 explicit. Reverse imports fail the cargo-modules
-\* CI gate at build time per `book/src/en/architecture/overview.md`.
+\* FORBIDDEN per E3 explicit. Reverse imports fail the Rust
+\* compiler's non-cyclic intra-crate import graph at build time
+\* per `book/src/en/architecture/overview.md`.
 \* (R4-X is the sibling L0-internal 4-stratum gate, not refined here.)
 LayerImportStrictlyDownward ==
     \A imp \in layer_imports :
@@ -215,7 +217,7 @@ EntryParentDagDepthBounded ==
 \* non-root Entry has a parent Entry with strictly smaller depth.
 \* Combined with EntryParentDagDepthBounded, this rules out cycles
 \* (any cycle would require equal-depth ancestors). Parent
-\* immutable post-creation per P5 / spec body §11.3 E8.
+\* immutable post-creation per P5 / E8 invariant.
 EntryParentDagAcyclic ==
     \A e \in r4_entries :
         e.parent_entry # "NONE" =>
@@ -238,9 +240,8 @@ ActivitySelfLoopBlocked ==
 MetaVerbDepthBounded ==
     \A a \in r4_activities : a.meta_verb_depth <= MaxMetaVerbDepth
 
-\* INV E3-X: ImportDirectionMonotone (MC, M2.6 R4-X stratum extension,
-\* DIP-N6 Phase 2 M2-NEW-4a). Formal-method companion to the M2.6
-\* mechanical CI grep gate.
+\* INV E3-X: ImportDirectionMonotone (MC, R4-X stratum extension).
+\* Formal-method companion to the mechanical CI grep gate.
 \*
 \* Scope: L1+ runtime sandbox sub-DAG (separate from R4-X's L0-internal
 \* `abi → state → runtime → persist` DAG documented in the R4-X sibling
@@ -254,8 +255,8 @@ MetaVerbDepthBounded ==
 \*
 \* Direction invariant: imports flow boundary → runtime exclusively;
 \* reverse edge (runtime → boundary) is forbidden. The CI lint job
-\* (`.github/workflows/ci.yml` line 145-163, M2.6 commit `a0d190a`)
-\* enforces this at the source-code level via `grep -E "use\s+
+\* (`.github/workflows/ci.yml` line 145-163) enforces this at the
+\* source-code level via `grep -E "use\s+
 \* (crate::)?(hook_host|observer_host)"` against
 \* `arkhe-forge-platform/src/wasm_runtime_common/`; this INV is the
 \* TLA+-abstract companion that names the property in the formal layer.
@@ -268,7 +269,7 @@ MetaVerbDepthBounded ==
 \*   - TLA+ INV body: necessary precondition `BoundaryModules \cap
 \*     RuntimeModules = {}` — Apalache-checkable static set disjointness
 \*   - Source-level enforcement (sufficient condition): CI grep gate at
-\*     `.github/workflows/ci.yml` lines 145-163 (M2.6 commit `a0d190a`)
+\*     `.github/workflows/ci.yml` lines 145-163
 \*     runs `grep -rE "use\s+(crate::)?(hook_host|observer_host)"` against
 \*     `arkhe-forge-platform/src/wasm_runtime_common/`; any reverse-edge
 \*     import (runtime → boundary) fails the lint job.
@@ -278,7 +279,7 @@ MetaVerbDepthBounded ==
 \* (δ source-level enforcement reference enrichment).
 \*
 \* Anchored to:
-\*   - `.github/workflows/ci.yml` lint job R4-X verify step (M2.6, lines 145-163)
+\*   - `.github/workflows/ci.yml` lint job R4-X verify step (lines 145-163)
 \*   - `arkhe-forge-platform/src/wasm_runtime_common/mod.rs` (runtime
 \*     stratum, head-doc R4-X stratum classification)
 \*   - `arkhe-forge-platform/src/{hook_host,observer_host}/` (boundary
@@ -292,7 +293,7 @@ ImportDirectionMonotone ==
 
 \* RecordLayerImport — register a layer-import edge. Pre-condition
 \* enforces E3 strictly-downward at insertion site (build-time
-\* cargo-modules CI gate refinement).
+\* Rust `pub(crate)` + non-cyclic import graph refinement).
 RecordLayerImport(imp) ==
     /\ imp \in Import
     /\ LayerOrder[imp.to] < LayerOrder[imp.from]
@@ -392,11 +393,10 @@ SpecR4 == InitR4 /\ [][NextR4]_vars_r4
  * Section 3 — Module-specific INVs
  *
  *   E3-LayerImportStrictlyDownward  (MC, E3 cross-layer 3-tier)
- *   E3-X-ImportDirectionMonotone    (MC, M2-NEW-4a R4-X stratum
- *                                    extension; L1+ runtime sub-DAG
- *                                    boundary→runtime single direction;
- *                                    formal companion to M2.6 CI grep
- *                                    gate)
+ *   E3-X-ImportDirectionMonotone    (MC, R4-X stratum extension;
+ *                                    L1+ runtime sub-DAG boundary→
+ *                                    runtime single direction; formal
+ *                                    companion to CI grep gate)
  *   E8-EntryParentDagDepthBounded   (MC, hard cap 64)
  *   E8-EntryParentDagAcyclic        (MC, depth monotonicity)
  *   E9-ActivitySelfLoopBlocked      (MC, actor # target)
@@ -406,42 +406,45 @@ SpecR4 == InitR4 /\ [][NextR4]_vars_r4
 (* --- R4-X sibling concept note (L0-internal, not refined here) ---
  *
  * R4-X (`book/src/en/appendix/decisions.md` R4-X — Layer DAG
- * one-way + cargo-modules CI gate) anchors the L0 kernel INTERNAL
- * 4-stratum DAG (`abi → state → runtime → persist`, single-crate
- * intra-module ordering — decisions.md rationale "Reverse imports
- * like `state → runtime → persist` could sneak in unintentionally").
- * R4-X is enforced by cargo-modules at L0 build time and operates
- * at the L0-internal abstraction level.
+ * one-way + Rust `pub(crate)` visibility + non-cyclic intra-crate
+ * import graph) anchors the L0 kernel INTERNAL 4-stratum DAG
+ * (`abi → state → runtime → persist`, single-crate intra-module
+ * ordering — decisions.md rationale "Reverse imports like
+ * `state → runtime → persist` could sneak in unintentionally").
+ * R4-X is enforced by the Rust compiler at L0 build time via
+ * `pub(crate)` module visibility + non-cyclic intra-crate import
+ * graph (Rust's own compile boundary), and operates at the
+ * L0-internal abstraction level.
  *
- * R4-I (this module) refines E3 cross-layer 3-tier (v0.12 sealing
- * scope L0/L1/L2 per 02-layers.md §2.1+§2.2). The two operate at
+ * R4-I (this module) refines E3 cross-layer 3-tier (the 3-tier sealing
+ * scope L0/L1/L2. The two operate at
  * different abstraction levels:
  *   - R4-X: WITHIN the L0 crate — module-graph stratum order
  *           (abi/state/runtime/persist).
  *   - R4-I/E3: ACROSS crates — cross-layer import direction
  *              (L1 → L0 OK, L1 → L2 forbidden, etc.).
- * Both leverage cargo-modules CI gates, but at different scopes.
+ * Both leverage Rust compiler boundaries, but at different scopes.
  * R4-I does NOT refine R4-X; the two are sibling concepts at
  * distinct abstraction levels. The Rust-level enforcement of E3
  * is the build-gate (rejection at compile time); the TLA+
  * refinement here provides the formal-method anchor for the E3
  * cross-layer property the gate enforces.
  *
- * R4-X is Layer A DO NOT TOUCH item 6 per
- * `runtime-book/src/en/architecture/16-references.md` ordering:
+ * R4-X is Layer A DO NOT TOUCH item 5 per
+ * the runtime architecture Layer A reference ordering:
  * (1) DOMAIN_CTX / (2) InvariantLifetime / (3) Principal+KernelEvent
- * +StepStage derives / (4) A11 MC tag / (5) ROADMAP Deferred items
- * / (6) R4-X DAG / (7) EventMask bit allocation / (8) WalRecord
- * postcard field order. Layer A sealing means the cargo-modules CI
- * gate config is permanent; only escalation by explicit user consent
- * can relax it.
+ * +StepStage derives / (4) A11 MC tag / (5) R4-X DAG /
+ * (6) EventMask bit allocation / (7) WalRecord postcard field
+ * order. Layer A sealing means the Rust `pub(crate)` visibility +
+ * non-cyclic import graph is permanent; only escalation by explicit
+ * user consent can relax it.
  *
  * Symmetric counterparts:
  *   - CR-1 (Adversary A, chain-affecting compute determinism)
  *   - CR-3 (PQC downgrade, chain-anchored policy)
  *   - CR-4 (Adversary B, chain-non-affecting observer mutation)
  *
- * R4-I + CR-1 + CR-3 + CR-4 close the v0.12 sealing chain at the
+ * R4-I + CR-1 + CR-3 + CR-4 close the 3-tier sealing chain at the
  * formal-method level: layering integrity + compute determinism +
  * policy anchoring + observer confinement.
  *)

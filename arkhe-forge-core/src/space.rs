@@ -1,4 +1,4 @@
-//! Space primitive — container / scope (spec §4.3).
+//! Space primitive — container / scope.
 
 use std::collections::BTreeSet;
 
@@ -12,7 +12,7 @@ use crate::component::BoundedString;
 use crate::context::{ActionContext, ActionError};
 use crate::ArkheAction;
 use crate::ArkheComponent;
-// E14.L1-Deny enforcement on Action::compute (auditor cross-review Q2(i)).
+// E14.L1-Deny enforcement on Action::compute.
 use crate::arkhe_pure;
 
 /// Opaque handle into the runtime Space namespace.
@@ -137,13 +137,13 @@ impl ActionCompute for CreateSpace {
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
         // E-user-3 C3 MC — refuse Action when the creator's backing user is
         // already in `GdprStatus::ErasurePending`. The cascade owns the only
-        // legal write path until completion (spec §3.3 / §4.1).
+        // legal write path until completion.
         ctx.ensure_actor_eligible(self.config.creator, ctx.tick())?;
 
         // E-space-4 MC — parent chain depth check. A parent reference that
         // would push the child past `MAX_SPACE_DEPTH` is rejected; a None
         // parent roots at depth 0. The `ParentChainDepth` O(1) cache is
-        // read from the attached `InstanceView` (spec §4.3 invariant E8).
+        // read from the attached `InstanceView` (E8 invariant).
         let child_depth: u8 = match self.config.parent_space {
             Some(parent_id) => {
                 let parent_depth = ctx

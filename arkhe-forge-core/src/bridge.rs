@@ -20,9 +20,8 @@
 //!    stable per `(instance_id, type_code, tick, seq)` but not
 //!    per-world. The reference `RecordHandShowdown` action in
 //!    `examples/card_primitives` does not call `next_id`, so the
-//!    limitation is inert for the published demo. A future kernel
-//!    release that surfaces `Instance::world_seed` through its
-//!    `ActionContext` accessor closes this gap.
+//!    limitation is inert for the published demo. `Instance::world_seed`
+//!    is not exposed through the kernel `ActionContext` accessor.
 //!
 //! 2. **Principal / capabilities pinned to
 //!    `Principal::System` / `CapabilityMask::SYSTEM` here.** The
@@ -30,9 +29,9 @@
 //!    caller-supplied caps in `Kernel::step`, so the bridge's pinned
 //!    values cannot relax the security gate — they are local to the
 //!    forge-side compute body. A forge compute that branches on
-//!    [`ActionContext::principal`] will see `System`. A future kernel
-//!    release that surfaces the caller principal through the
-//!    `ActionContext` accessor closes this gap.
+//!    [`ActionContext::principal`] will see `System`. The caller
+//!    principal is not exposed through the kernel `ActionContext`
+//!    accessor.
 //!
 //! 3. **Forge `compute()` returning `Err(ActionError)` is suppressed
 //!    to an empty `Vec<Op>`.** The kernel sees an action that
@@ -61,7 +60,7 @@
 //! - **`IDEMPOTENT` must be `false`.** Idempotent forge actions
 //!   require the kernel-side
 //!   [`IdempotencyIndex`](crate::context::IdempotencyIndex) integration
-//!   (production fix: PG-UNIQUE-INDEX, spec §14.8) before they can
+//!   (production fix: PG-UNIQUE-INDEX) before they can
 //!   flow through this bridge safely.
 //!
 //! - **`compute()` body must not branch on

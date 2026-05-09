@@ -1,4 +1,4 @@
-//! Multi-channel KMS health check (spec §14.11.2.1).
+//! Multi-channel KMS health check.
 //!
 //! Supplies the N-of-M quorum signal that drives the `observer_state →
 //! degraded` transition (metric `arkhe_runtime_kms_health_channels{channel,
@@ -32,7 +32,7 @@
 //!    for a "is the KMS path reachable at the L4 layer?" probe.
 //! 3. TCP reachability already detects the attacks the threat model
 //!    actually covers (DNS + BGP + regional outage). Full application-layer
-//!    HTTPS validation is a future release item.
+//!    HTTPS validation routes through a separate verify path.
 //!
 //! The [`HealthChannel`] trait leaves room for a future `UreqDohChannel` —
 //! impls are not sealed.
@@ -45,13 +45,13 @@ use std::time::Duration;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Channel {
-    /// 일반 DNS / HTTPS resolver — 기본 경로.
+    /// Standard DNS / HTTPS resolver — default path.
     Default,
-    /// DNS-over-HTTPS (DoH) 경유 — DNS poisoning mitigation.
+    /// Via DNS-over-HTTPS (DoH) — DNS poisoning mitigation.
     DnsOverHttps,
-    /// Static IP + TLS — BGP hijack / DNS 완전 우회.
+    /// Static IP + TLS — full BGP hijack / DNS bypass.
     StaticIp,
-    /// Alternate region endpoint — regional outage 식별.
+    /// Alternate region endpoint — regional outage identification.
     AlternateRegion,
 }
 
@@ -59,11 +59,11 @@ pub enum Channel {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// 정상.
+    /// Healthy.
     Healthy,
-    /// 실패 (timeout / 5xx / network error).
+    /// Failing (timeout / 5xx / network error).
     Failing,
-    /// 최초 check 이전.
+    /// Before the first check.
     Unknown,
 }
 
@@ -72,10 +72,10 @@ pub enum Status {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum HealthError {
-    /// DNS resolution 실패 — channel config 오류 수준.
+    /// DNS resolution failure — channel config error level.
     #[error("dns resolution failed for {hostport}")]
     DnsResolution {
-        /// 원본 host:port 문자열.
+        /// Original host:port string.
         hostport: String,
     },
     /// I/O error — internally mapped from `std::io::Error`.
@@ -122,7 +122,7 @@ fn static_reachable(addr: SocketAddr, timeout: Duration) -> Status {
 }
 
 /// DoH endpoint reachability probe. Defaults: Cloudflare `1.1.1.1:443` +
-/// Google `8.8.8.8:443` — spec §14.11.2.1.
+/// Google `8.8.8.8:443` reachability probe.
 pub struct DohHealthChannel {
     hostport: String,
     timeout: Duration,
@@ -191,7 +191,7 @@ impl HealthChannel for RegionHealthChannel {
 }
 
 /// Static IP + port probe — bypasses DNS + CDN completely. Operators pin
-/// this to a known-good VPC endpoint IP (spec §14.11.2.1 fallback path).
+/// this to a known-good VPC endpoint IP (fallback probe path).
 pub struct StaticIpHealthChannel {
     addr: SocketAddr,
     timeout: Duration,
@@ -297,14 +297,14 @@ pub struct MultiChannelHealth {
 }
 
 impl MultiChannelHealth {
-    /// 새 aggregator — 초기에 모든 channel Unknown.
+    /// New aggregator — all channels initially Unknown.
     pub fn new(channels: &[Channel]) -> Self {
         Self {
             channels: channels.iter().map(|c| (*c, Status::Unknown)).collect(),
         }
     }
 
-    /// 개별 channel 의 status 업데이트.
+    /// Update an individual channel's status.
     pub fn set_status(&mut self, channel: Channel, status: Status) {
         for (c, s) in &mut self.channels {
             if *c == channel {
@@ -315,10 +315,10 @@ impl MultiChannelHealth {
         self.channels.push((channel, status));
     }
 
-    /// N-of-M aggregate — 전체 channel 중 `threshold` 개 이상 `Failing` 이면 true.
+    /// N-of-M aggregate — true when `threshold` or more channels report `Failing`.
     ///
-    /// Default: M=3 channel (Default / DoH / StaticIp 또는 AlternateRegion) +
-    /// threshold=2. 2 이상 실패 시 auto_promote trigger 조건 충족.
+    /// Default: M=3 channels (Default / DoH / StaticIp or AlternateRegion) +
+    /// threshold=2. Two or more failures satisfy the auto_promote trigger.
     pub fn is_quorum_failing(&self, threshold: usize) -> bool {
         self.channels
             .iter()
@@ -327,7 +327,7 @@ impl MultiChannelHealth {
             >= threshold
     }
 
-    /// 현재 healthy channel 개수 — metric export 용.
+    /// Current healthy channel count — for metric export.
     pub fn healthy_count(&self) -> usize {
         self.channels
             .iter()

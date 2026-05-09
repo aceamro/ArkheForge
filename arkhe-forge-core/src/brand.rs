@@ -1,4 +1,4 @@
-//! Shell brand — compile-time per-shell type isolation (spec §3.7).
+//! Shell brand — compile-time per-shell type isolation.
 //!
 //! Cross-shell references fail the type checker long before `submit()` reaches
 //! the kernel. The replay path adds a runtime `ctx.read` double-check (E7
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Canonical wire bytes are the inner `[u8; 16]` (transparent serde). Distinct
 /// shells on the same Runtime get non-colliding `ShellId`s via the world-seed
-/// entropy path (spec §4.7); cross-runtime collision is scoped away by
+/// entropy path; cross-runtime collision is scoped away by
 /// `InstanceId` in the id-derivation function.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 #[serde(transparent)]

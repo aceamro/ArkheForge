@@ -1,4 +1,4 @@
-//! Axiom harness for E-entry-1..7 (spec §4.4 / §11.5).
+//! Axiom harness for E-entry-1..7.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Type-system proven**: E-entry-1, E-entry-5 — `EntryParentDepth` cache
@@ -36,7 +36,7 @@ fn base_core(shell: ShellId) -> EntryCore {
     }
 }
 
-/// **E-entry-1 (MC)** — exactly one `EntryCore` per Entry. Spec §4.4.
+/// **E-entry-1 (MC)** — exactly one `EntryCore` per Entry..
 #[test]
 fn e_entry_1_core_type_code_pinned() {
     assert_eq!(EntryCore::TYPE_CODE, 0x0003_0301);
@@ -46,7 +46,7 @@ fn e_entry_1_core_type_code_pinned() {
 /// **E-entry-2 (MC)** — `author_id` and `space_id` live in the same shell
 /// (E7 inheritance). The skeleton pins the field shape; a future release
 /// compute path reads `ActorProfile` and `SpaceConfig` for dual-check.
-/// Spec §4.4.
+///.
 #[test]
 fn e_entry_2_core_binds_author_and_space() {
     let shell = ShellId([0x22; 16]);
@@ -57,7 +57,7 @@ fn e_entry_2_core_binds_author_and_space() {
 }
 
 /// **E-entry-3 (MC)** — `parent_entry` chain is cycle-free with depth ≤ 64.
-/// Surfaces the depth cache Component + constant. Spec §4.4.
+/// Surfaces the depth cache Component + constant..
 #[test]
 fn e_entry_3_parent_depth_cache_exposed() {
     assert_eq!(EntryParentDepth::TYPE_CODE, 0x0003_0303);
@@ -71,7 +71,7 @@ fn e_entry_3_parent_depth_cache_exposed() {
 /// **E-entry-4 (MC)** — relay is single-level. `relay_of` points to the
 /// source Entry, and `relay_kind` tags `Plain` vs `Quote`. The skeleton
 /// pins the field triple; a future release compute path rejects
-/// `relay_of(relay_of(…))`. Spec §4.4.
+/// `relay_of(relay_of(…))`..
 #[test]
 fn e_entry_4_relay_kind_pinned_discriminants() {
     // `#[non_exhaustive] #[repr(u8)]` pins the discriminant order.
@@ -87,7 +87,7 @@ fn e_entry_4_relay_kind_pinned_discriminants() {
 }
 
 /// **E-entry-5 (MC)** — `DeleteEntry` is soft. `EntryBody` is removed while
-/// `EntryCore` remains (for audit). Pins the split. Spec §4.4.
+/// `EntryCore` remains (for audit). Pins the split..
 #[test]
 fn e_entry_5_body_is_separate_component() {
     assert_eq!(EntryBody::TYPE_CODE, 0x0003_0302);
@@ -103,7 +103,7 @@ fn e_entry_5_body_is_separate_component() {
 
 /// **E-entry-6 (MC)** — `edit_seq` is monotone. The skeleton pins the field
 /// as `u32`; a future release compute path rejects non-monotone updates.
-/// Spec §4.4.
+///.
 #[test]
 fn e_entry_6_edit_seq_is_unsigned_monotone_type() {
     let b0 = EntryBody {
@@ -123,7 +123,7 @@ fn e_entry_6_edit_seq_is_unsigned_monotone_type() {
 /// **E-entry-7 (MC / P5)** — `parent_entry` and `relay_of` are immutable
 /// after creation. The skeleton pins the optional-handle shape; a future
 /// release compute path rejects `UpdateEntry { parent_entry / relay_of }`.
-/// Spec §4.4.
+///.
 #[test]
 fn e_entry_7_body_cipher_meta_surface_stable() {
     // The cipher meta surface is what survives the soft-delete boundary on

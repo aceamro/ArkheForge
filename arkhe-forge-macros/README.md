@@ -23,7 +23,7 @@ compile-fail tests and advanced shell authors.
 
 Compile-time validation enforces:
 
-- `#[arkhe(type_code = N)]` sits in the correct spec §3.2 sub-range.
+- `#[arkhe(type_code = N)]` sits in the correct reserved sub-range.
 - First named field is `schema_version: u16` (wire version tag).
 - `#[arkhe(band = K)]` present for `ArkheAction`, `K ∈ {1, 2, 3}`.
 - `#[arkhe(idempotent)]` requires an `idempotency_key` field.

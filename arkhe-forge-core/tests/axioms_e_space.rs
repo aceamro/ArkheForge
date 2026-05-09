@@ -1,4 +1,4 @@
-//! Axiom harness for E-space-1..7 (spec §4.3 / §11.5).
+//! Axiom harness for E-space-1..7.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Compute-level machine-checked**: E-space-3 (parent chain depth via
@@ -42,7 +42,7 @@ fn base_config(shell: ShellId, slug: &str) -> SpaceConfig {
 
 /// **E-space-1 (MC)** — exactly one `SpaceConfig` per Space. The skeleton
 /// pins the wire contract; L2 enforcement of single-attach at `SpawnEntity`
-/// is a future release. Spec §4.3.
+/// is a future release..
 #[test]
 fn e_space_1_config_type_code_pinned() {
     assert_eq!(SpaceConfig::TYPE_CODE, 0x0003_0201);
@@ -52,7 +52,7 @@ fn e_space_1_config_type_code_pinned() {
 /// **E-space-2 (MC)** — `parent_space` must live in the same shell as the
 /// child. The skeleton surfaces `shell_id` on both sides; a future release
 /// compute path reads the parent's `SpaceConfig.shell_id` and rejects
-/// cross-shell parenting. Spec §4.3.
+/// cross-shell parenting..
 #[test]
 fn e_space_2_config_holds_shell_id() {
     let shell = ShellId([0x11; 16]);
@@ -62,7 +62,7 @@ fn e_space_2_config_holds_shell_id() {
 
 /// **E-space-3 (MC)** — parent chain is cycle-free. Enforced by the
 /// `ParentChainDepth` O(1) cache plus immutable `parent_space` (E-space-7).
-/// Spec §4.3 / §11.3.
+/// E-space-3 invariant.
 #[test]
 fn e_space_3_parent_chain_depth_component_exposed() {
     assert_eq!(ParentChainDepth::TYPE_CODE, 0x0003_0202);
@@ -73,7 +73,7 @@ fn e_space_3_parent_chain_depth_component_exposed() {
     assert!(d.depth < MAX_SPACE_DEPTH);
 }
 
-/// **E-space-4 (MC)** — depth ≤ 64 hard cap. Spec §4.3 / §11.3.
+/// **E-space-4 (MC)** — depth ≤ 64 hard cap.
 #[test]
 fn e_space_4_depth_cap_is_sixty_four() {
     assert_eq!(MAX_SPACE_DEPTH, 64);
@@ -81,7 +81,7 @@ fn e_space_4_depth_cap_is_sixty_four() {
 
 /// **E-space-5 (MC)** — `creator.shell_id == self.shell_id`. The skeleton
 /// pins the creator field; a future release compute path cross-checks.
-/// Spec §4.3.
+///.
 #[test]
 fn e_space_5_creator_field_typed_as_actor_id() {
     let shell = ShellId([0x01; 16]);
@@ -91,7 +91,7 @@ fn e_space_5_creator_field_typed_as_actor_id() {
 
 /// **E-space-6 (MC)** — `SpaceKind::Extension` must carry a manifest-pinned
 /// `type_code` (A15). Variant is `#[non_exhaustive]` so compute paths must
-/// handle the extension explicitly. Spec §4.3.
+/// handle the extension explicitly..
 #[test]
 fn e_space_6_extension_kind_requires_type_code() {
     let ext = SpaceKind::Extension {
@@ -108,7 +108,7 @@ fn e_space_6_extension_kind_requires_type_code() {
 /// **E-space-7 (MC / P5)** — `parent_space` is immutable after creation.
 /// The skeleton pins the field shape + `Option<SpaceId>` semantics; a
 /// future release compute path rejects `UpdateSpace { parent_space: Some(_) }`.
-/// Spec §4.3.
+///.
 #[test]
 fn e_space_7_parent_is_optional_and_pinned() {
     let shell = ShellId([0x01; 16]);
@@ -136,7 +136,7 @@ fn e_space_7_parent_is_optional_and_pinned() {
 /// cannot resolve the parent's `ParentChainDepth` Component, so compute
 /// raises `InvalidInput("parent space not found")` — the same error path
 /// that a follow-up release will trigger for parents that have rolled past
-/// the `MAX_SPACE_DEPTH` cap. Spec §4.3 E-space-4 / §11.3 E8.
+/// the `MAX_SPACE_DEPTH` cap (E-space-4 / E8 invariant).
 #[test]
 fn e_space_4_compute_rejects_missing_parent_view() {
     use arkhe_forge_core::action::ActionCompute;

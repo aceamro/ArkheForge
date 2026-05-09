@@ -25,7 +25,7 @@ arrayvec            = { workspace = true }
 thiserror           = { workspace = true }
 zeroize             = { workspace = true }
 
-# §14.7 forward-looking event activation flags. The wire surface
+# Forward-looking event activation flags. The wire surface
 # (TypeCode + struct definitions) for `ReplicaIdAllocation` +
 # `AuditReceiptKeyPolicy` is reserved here but kept behind these
 # activation-condition feature flags so default builds do not even

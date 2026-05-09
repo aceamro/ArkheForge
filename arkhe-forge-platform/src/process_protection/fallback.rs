@@ -1,5 +1,5 @@
-//! Fallback — Tier-0 software-kek 은 본 target 에서 reject.
-//! Linux / macOS / Windows 외 target 에서는 `apply_all()` 이 항상 Err.
+//! Fallback — Tier-0 software-kek is rejected on this target.
+//! On targets other than Linux / macOS / Windows, `apply_all()` always returns Err.
 
 use super::{ProcessProtection, ProtectionError};
 

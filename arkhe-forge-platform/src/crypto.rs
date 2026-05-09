@@ -1,5 +1,4 @@
-//! Crypto-erasure coordinator — Tier-1+ AEAD envelope encryption
-//! (spec §14.9.1).
+//! Crypto-erasure coordinator — Tier-1+ AEAD envelope encryption.
 //!
 //! Provides:
 //!
@@ -17,7 +16,7 @@
 //!   a single-writer lock; the helper is atomic per-element and rolls
 //!   the whole slice back on the first failure.
 //!
-//! Feature matrix (spec §14.9.1 §§3 / §§12):
+//! Feature matrix:
 //!
 //! | Feature                | `XChaCha20-Poly1305` | `AES-256-GCM` | `AES-256-GCM-SIV` |
 //! |------------------------|----------------------|---------------|-------------------|
@@ -25,9 +24,8 @@
 //! | `tier-1-kms`           | ✓                    | rejected      | rejected          |
 //! | `tier-2-multi-kms`     | ✓                    | ✓             | ✓                 |
 //!
-//! HSM / KMS wrap-unwrap integration, the Sigstore transparency anchor,
-//! and the PQC-hybrid signing envelope all sit behind the
-//! `hf2_kms` skeleton today; the coordinator's public surface is stable.
+//! The coordinator's public surface is stable. HSM / KMS wrap-unwrap
+//! integration and the Sigstore transparency anchor route through `hf2_kms`.
 
 use arkhe_forge_core::pii::{
     compute_aad, AeadKind, DekId, DekMessageCounter, PiiError, PiiType, RotationTrigger,
@@ -44,7 +42,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// deployments use the default (all fields zero); federation builds
 /// populate `replica_id` from the per-instance manifest anchor so two
 /// regions sharing the same DEK material cannot collide their
-/// deterministic nonces (spec §14.9.1 §§3 F6 reservation).
+/// deterministic nonces (the F6 invocation-field reservation).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DekConfig {
     /// 4-byte invocation field for the AES-GCM(-SIV) nonce. Must be
@@ -54,7 +52,7 @@ pub struct DekConfig {
     pub replica_id: u32,
 }
 
-/// Per-user 32-byte DEK material (spec §14.9.1 §§2). The byte buffer is
+/// Per-user 32-byte DEK material. The byte buffer is
 /// wiped on `Drop` via the `zeroize` crate; callers obtain a `Dek` from
 /// an HSM unwrap — the runtime never derives key material directly
 /// (envelope encryption).
@@ -257,7 +255,7 @@ impl NonceBytes {
     }
 }
 
-/// Per-PII-marker ciphertext envelope (spec §14.9.1 §§1).
+/// Per-PII-marker ciphertext envelope.
 ///
 /// The wire shape is
 /// `(dek_id, pii_code, aead_kind, nonce, ciphertext_with_tag)` —
@@ -271,9 +269,9 @@ impl NonceBytes {
 /// `PhantomData` so postcard can round-trip the struct.
 #[derive(Debug, PartialEq, Eq)]
 pub struct EncryptedPii<T: PiiType> {
-    /// HSM/KMS key reference — spec §14.9.1 §§2.
+    /// HSM/KMS key reference.
     pub dek_id: DekId,
-    /// Wire tag — spec §14.9.1 §§1. Validated against `T::PII_CODE` at
+    /// Wire tag. Validated against `T::PII_CODE` at
     /// decrypt time.
     pub pii_code: u16,
     /// AEAD family used for the ciphertext.
@@ -384,7 +382,7 @@ struct RawEncryptedPii {
 
 // ===================== CryptoCoordinator =====================
 
-/// Tier-1+ AEAD coordinator (spec §14.9.1 §§3 + §§12).
+/// Tier-1+ AEAD coordinator.
 ///
 /// The coordinator carries the shell-declared `AeadKind` (from
 /// `[audit.pii_cipher]`) plus an opaque `nonce_source` the caller

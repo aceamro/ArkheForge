@@ -30,7 +30,7 @@
 //! ## Current scope
 //!
 //! Manifest-driven authz policy, the PG-UNIQUE-INDEX-backed
-//! idempotency dedup (spec §14.8), and full
+//! idempotency dedup, and full
 //! [`ActorHandleIndex`](arkhe_forge_core::context::ActorHandleIndex)
 //! production paths are not yet wired through `RuntimeService` — a
 //! forge action's idempotency / actor-handle paths run with the L1
@@ -128,7 +128,7 @@ impl RuntimeService {
 
 /// Append every record of `wal` into the buffered sink, then flush.
 /// Each record is postcard-serialized via the kernel's stable
-/// [`arkhe_kernel::WalRecord`] wire shape (DO NOT TOUCH #8 —
+/// [`arkhe_kernel::WalRecord`] wire shape (DO NOT TOUCH #7 —
 /// `seq: u64` first declared field) and the sink frames with the
 /// standard magic + length-prefix per `wal_export`'s firm
 /// requirements.

@@ -1,14 +1,14 @@
-//! L2 Projection observer pipeline (spec §5.5 / §12).
+//! L2 Projection observer pipeline.
 //!
 //! L0 emits deterministic events; L2 turns those events into denormalized
 //! read-model rows that PG (or another store) serves to higher layers. This
-//! module ships the skeleton: the [`Projection`] trait, a
+//! module exposes: the [`Projection`] trait, a
 //! [`ProjectionRouter`] that dispatches [`EventRecord`]s by `TypeCode`,
 //! a [`ProjectionStore`] abstraction, an in-memory store, and active /
 //! passive / draining lifecycle transitions.
 //!
 //! The PG-backed store, the L0 observer bridge, and the
-//! `kernel_projection_state` chain-anchored view all land in a future release.
+//! `kernel_projection_state` chain-anchored view route through the trait surface.
 
 use core::marker::PhantomData;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ use crate::manifest::ManifestSnapshot;
 
 // ===================== Lifecycle + Context + Errors =====================
 
-/// Observer worker lifecycle (active-passive HA). Spec §14.11.2.
+/// Observer worker lifecycle (active-passive HA).
 ///
 /// * `Passive` — read-only secondary. Consumes events for warm standby but
 ///   does not commit writes upstream.
@@ -45,7 +45,7 @@ pub enum ObserverState {
     Draining,
 }
 
-/// Outcome of an auto-promote policy evaluation (spec §14.11.2).
+/// Outcome of an auto-promote policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PromotionDecision {
@@ -62,7 +62,7 @@ pub enum PromotionDecision {
 pub const HF2_HEALTH_QUORUM_MIN: usize = 2;
 
 /// Per-dispatch context carried alongside an [`EventRecord`]. The `'i`
-/// lifetime reserves the slot that a future release binds to the L0
+/// lifetime reserves the slot that binds to the L0
 /// `Effect<'i, Authorized>` borrow, and also scopes the optional manifest
 /// snapshot reference.
 pub struct ProjectionContext<'i> {
@@ -387,7 +387,7 @@ impl ProjectionRouter {
     /// the elapsed outage, the multi-channel KMS health quorum, and the
     /// threshold-HSM share readiness.
     ///
-    /// Policy values (spec §14.11.2):
+    /// Policy values:
     ///
     /// | `kms_auto_promote`  | Decision matrix |
     /// |---------------------|-----------------|
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(c, back);
     }
 
-    /// Manifest auto-promote matrix — spec §14.11.2 decision table.
+    /// Manifest auto-promote decision table.
     /// Run via a small helper that builds a `ManifestSnapshot` with a
     /// configurable `kms_auto_promote` string.
     #[test]

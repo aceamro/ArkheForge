@@ -1,6 +1,6 @@
 //! Sync `KmsBackend` trait — envelope-encryption interface.
 //!
-//! Spec §14.9.1 §§2 / §14.11.2. The trait is intentionally **synchronous** so
+//! The trait is intentionally **synchronous** so
 //! L2 coordinators (all sync today) can stay sync. Real-world backends whose
 //! SDKs are async-only (e.g. `aws-sdk-kms`) wrap a dedicated runtime and
 //! `block_on` internally — the sync surface is the stable contract.
@@ -8,11 +8,11 @@
 //! Implementations are responsible for:
 //!
 //! 1. Generating DEK material inside the KMS boundary — the runtime never
-//!    derives 32-byte key material directly (spec §14.9.1 §§2).
+//!    derives 32-byte key material directly.
 //! 2. Wrapping / unwrapping DEKs under a `KekRef`-addressed KEK. The
 //!    wrapped bytes are opaque from the runtime's perspective.
 //! 3. Emitting a signed destruction attestation when a KEK is deleted
-//!    (§14.9.1 §§5) — the attestation flows up the stack into the
+//!    — the attestation flows up the stack into the
 //!    `UserErasureCompleted` receipt.
 //! 4. Rotating a KEK pair so in-flight wrapped DEKs can be re-enveloped
 //!    under the new KEK.

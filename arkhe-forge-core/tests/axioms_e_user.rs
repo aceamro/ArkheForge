@@ -1,4 +1,4 @@
-//! Axiom harness for E-user-1..4 (spec §4.1 / §11.5).
+//! Axiom harness for E-user-1..4.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Type-system proven**: E-user-1, E-user-2, E-user-4 — typed
@@ -40,7 +40,7 @@ fn ctx() -> ActionContext<'static> {
 
 /// **E-user-1 (MC)** — exactly one `UserProfile` per User. Derive pins the
 /// `TYPE_CODE` + `SCHEMA_VERSION`, so the wire-level identity cannot be
-/// duplicated under a collision. Spec §4.1.
+/// duplicated under a collision.
 #[test]
 fn e_user_1_profile_type_code_pinned() {
     assert_eq!(UserProfile::TYPE_CODE, 0x0003_0001);
@@ -49,7 +49,7 @@ fn e_user_1_profile_type_code_pinned() {
 
 /// **E-user-2 (MC)** — `AuthCredential` KDF minima. Argon2id parameters
 /// below OWASP 2024 baseline are rejected by `validate_kdf_params`. Spec
-/// §4.1 S2 / C9.
+/// S2 / C9 anchors.
 #[test]
 fn e_user_2_kdf_minima_enforced() {
     let weak = KdfParams {
@@ -74,7 +74,7 @@ fn e_user_2_kdf_minima_enforced() {
 }
 
 /// **E-user-2 (MC)** — `RegisterUser` compute rejects weak KDF at the L1
-/// boundary. Spec §4.1 / §11.5.
+/// boundary.
 #[test]
 fn e_user_2_register_rejects_weak_kdf() {
     let act = RegisterUser {
@@ -107,8 +107,8 @@ fn e_user_2_register_rejects_weak_kdf() {
 
 /// **E-user-3 (RUNTIME-ASSERTED)** — `GdprEraseUser` is a lease, not an
 /// immediate cascade. The Action emits `UserErasureScheduled` with a tick
-/// pointer and the §14.9 observer drives the p95 < 24h SLA. Spec §4.1 /
-/// §14.9.
+/// pointer and the erasure-cascade observer drives the p95 < 24h SLA.
+/// erasure-cascade observer.
 #[test]
 fn e_user_3_gdpr_erase_emits_lease_event() {
     let act = GdprEraseUser {
@@ -125,7 +125,7 @@ fn e_user_3_gdpr_erase_emits_lease_event() {
 
 /// **E-user-4 (TYPE-PROVEN)** — `UserId` wraps a `NonZeroU64` (A6 succession).
 /// Zero is structurally unrepresentable; `EntityId::new(0)` returns `None`
-/// at type-construction time. Spec §4.1 / §11.2.
+/// at type-construction time.
 #[test]
 fn e_user_4_user_id_non_zero_at_the_type_level() {
     assert!(EntityId::new(0).is_none());
@@ -135,8 +135,8 @@ fn e_user_4_user_id_non_zero_at_the_type_level() {
 
 /// **E-user-3 C3 (compute-MC)** — actor-originated compute paths reject when
 /// the actor's backing user is in `GdprStatus::ErasurePending`. The cascade
-/// owns the only legal write path until completion (spec §3.3 / §4.1 /
-/// §11.2 / NC2). The test stages a `UserBinding` + `UserProfile { gdpr_status:
+/// owns the only legal write path until completion (E-user-3 cascade,
+/// NC2 contract). The test stages a `UserBinding` + `UserProfile { gdpr_status:
 /// ErasurePending }` directly into the context's Op buffer (visible through
 /// `staged_read`), then drives `CreateSpace::compute` and asserts the
 /// gate fires before any Space-bound Op is pushed.

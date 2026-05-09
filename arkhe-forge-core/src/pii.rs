@@ -1,13 +1,12 @@
-//! PII wire format + AEAD AAD helper + DEK message counter — spec §14.9.1.
+//! PII wire format + AEAD AAD helper + DEK message counter.
 //!
-//! Surface: AAD 19-byte composition for AEAD tag binding, per-DEK message-count
-//! metric scaffold, `compute_body_hash` helper for L2 pre-compute, the
+//! Surface: AAD 19-byte composition for AEAD tag binding, per-DEK message
+//! counter, `compute_body_hash` helper for L2 pre-compute, the
 //! sealed [`PiiType`] trait plus its four canonical marker types
 //! (`ActorHandle`, `EntryBody`, `ActivityExtraBytes`, `AuthCredentialSecret`),
 //! and the [`ShellPiiType`] wrapper carrying shell-registered markers on the
 //! `0x0100..=0xFFFF` range (manifest-hooked, runtime-dispatched).
-//! [`UserSalt`] is the typed per-user anchor fed into [`compute_body_hash`]
-//! (spec §14.9.1 §§4).
+//! [`UserSalt`] is the typed per-user anchor fed into [`compute_body_hash`].
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 pub struct DekId(pub [u8; 16]);
 
 /// AEAD algorithm family — serialized as a single discriminant byte (spec
-/// §14.9.1 §§3).
+/// AEAD policy hook).
 ///
 /// `XChaCha20Poly1305` is the runtime default — misuse-resistant with a
 /// 192-bit nonce.
@@ -38,23 +37,23 @@ pub enum AeadKind {
 }
 
 /// Runtime-canonical `PII_CODE` reservations (`0x0001..=0x00FF`) — spec
-/// §14.9.1 §§1. Each constant is the wire tag for the corresponding PII
+/// Each constant is the wire tag for the corresponding PII
 /// family; shell-scoped codes (`0x0100..=0xFFFF`) are layered on top.
 pub mod pii_code {
     /// `ActorProfile.handle` — shell-scoped identifier.
     pub const ACTOR_HANDLE: u16 = 0x0001;
     /// `EntryBody.body_plaintext` — user content.
     pub const ENTRY_BODY: u16 = 0x0002;
-    /// `ActivityRecord.extra_bytes` — shell discretion, per-user encrypt 권고.
+    /// `ActivityRecord.extra_bytes` — shell discretion; per-user encryption recommended.
     pub const ACTIVITY_EXTRA_BYTES: u16 = 0x0003;
-    /// AuthCredential 보조 secret — KDF salt 와 별개 storage.
+    /// AuthCredential auxiliary secret — stored separately from the KDF salt.
     pub const AUTH_CREDENTIAL_SECRET: u16 = 0x0004;
 }
 
 // ===================== ShellPiiType =====================
 
 /// Audit / observer sensitivity level for a shell-registered PII type —
-/// spec §14.9.1 §§12. Higher levels trigger stricter logging policies
+/// Higher levels trigger stricter logging policies
 /// and can bind the type to specific AEAD / Tier requirements.
 #[non_exhaustive]
 #[repr(u8)]
@@ -71,7 +70,7 @@ pub enum Sensitivity {
 }
 
 /// Shell-registered PII marker living in the `0x0100..=0xFFFF` range
-/// (spec §14.9.1 §§1). Canonical `0x0001..=0x00FF` codes are reserved
+/// Canonical `0x0001..=0x00FF` codes are reserved
 /// for the sealed [`PiiType`] trait; shell-scoped types flow through
 /// this runtime-dispatched wrapper so manifests can declare additional
 /// PII families without editing the runtime crate.
@@ -83,11 +82,11 @@ pub struct ShellPiiType {
     sensitivity: Sensitivity,
     /// AEAD family the shell has pinned for this PII type. Must match
     /// the shell manifest `[audit.pii_cipher]` at decrypt time (see
-    /// spec §14.9.1 §§3 cipher-downgrade gate).
+    /// cipher-downgrade gate).
     aead_kind: AeadKind,
 }
 
-/// Shell-scoped wire range — `0x0100..=0xFFFF` (spec §14.9.1 §§1).
+/// Shell-scoped wire range — `0x0100..=0xFFFF`.
 pub const SHELL_PII_CODE_RANGE: core::ops::RangeInclusive<u16> = 0x0100..=0xFFFF;
 
 impl ShellPiiType {
@@ -136,7 +135,7 @@ impl ShellPiiType {
 /// generic type parameter.
 ///
 /// Duplicate registrations and out-of-range codes are refused; the
-/// registry is otherwise append-only (sunset flow mirrors §14.7 shell
+/// registry is otherwise append-only (sunset flow mirrors the shell
 /// sunset policy and is out of scope for this module).
 #[derive(Debug, Default)]
 pub struct ShellPiiRegistry {
@@ -188,12 +187,12 @@ impl ShellPiiRegistry {
     }
 }
 
-/// AEAD AAD (Additional Authenticated Data) — **정확히 19 byte** (spec §14.9.1 §§1).
+/// AEAD AAD (Additional Authenticated Data) — **exactly 19 bytes**.
 ///
 /// Layout: `dek_id (16) || pii_code.to_be_bytes() (2) || aead_kind as u8 (1)` = 19 B.
 ///
-/// Wrap field 변조 시 AEAD tag verification fail → `PiiError::AadMismatch`. 본 helper
-/// 는 encrypt / decrypt 양쪽에서 재계산 사용.
+/// Wrap-field tampering causes AEAD tag verification failure → `PiiError::AadMismatch`.
+/// This helper is reused for recomputation on both encrypt and decrypt paths.
 #[must_use]
 pub fn compute_aad(dek_id: &DekId, pii_code: u16, aead_kind: AeadKind) -> [u8; 19] {
     let mut aad = [0u8; 19];
@@ -203,7 +202,7 @@ pub fn compute_aad(dek_id: &DekId, pii_code: u16, aead_kind: AeadKind) -> [u8; 1
     aad
 }
 
-/// Per-user 128-bit salt held by the HSM (spec §14.9.1 §§4). Shredding
+/// Per-user 128-bit salt held by the HSM. Shredding
 /// the salt renders every `body_hash` derived from it pre-image-unsafe
 /// — the crypto-erasure pairing for content hashes.
 ///
@@ -246,7 +245,7 @@ impl core::fmt::Debug for UserSalt {
     }
 }
 
-/// `body_hash = BLAKE3(body || user_salt || entry_nonce)` — spec §14.9.1 §§4.
+/// `body_hash = BLAKE3(body || user_salt || entry_nonce)`.
 ///
 /// `user_salt` is held per-user by the HSM (shred → all entries unhashable).
 /// `entry_nonce` is a per-record 128-bit plaintext field. The L2 pre-compute
@@ -261,7 +260,7 @@ pub fn compute_body_hash(body: &[u8], user_salt: &UserSalt, entry_nonce: &[u8; 1
     *h.finalize().as_bytes()
 }
 
-/// Per-DEK message-count metric — spec §14.9.1 §§3.
+/// Per-DEK message-count metric.
 ///
 /// Warn at 2^30 messages, force rotation before 2^32 (well clear of the
 /// birthday bound). Observed backends plug into
@@ -272,20 +271,20 @@ pub struct DekMessageCounter {
     count: u64,
 }
 
-/// DEK rotation trigger 상태.
+/// DEK rotation trigger state.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RotationTrigger {
-    /// 정상 — threshold 미도달.
+    /// Healthy — threshold not yet reached.
     Healthy,
-    /// 2^30 warn threshold 도달 — operator 경고.
+    /// 2^30 warn threshold reached — operator warning.
     WarnApproachingLimit,
-    /// 2^32 - 쿨다운 — 즉시 rotation 필수 (force).
+    /// 2^32 - cooldown — immediate rotation required (force).
     MustRotate,
 }
 
 impl DekMessageCounter {
-    /// 새 counter — `dek_id` 를 key 로 추적.
+    /// New counter — keyed by `dek_id`.
     pub fn new(dek_id: DekId) -> Self {
         Self { dek_id, count: 0 }
     }
@@ -296,21 +295,21 @@ impl DekMessageCounter {
         self.dek_id
     }
 
-    /// 현재 count.
+    /// Current count.
     #[must_use]
     pub fn count(&self) -> u64 {
         self.count
     }
 
-    /// Encrypt 성공 시 호출 — count +1.
+    /// Called on successful encrypt — count += 1.
     pub fn record_message(&mut self) {
         self.count = self.count.saturating_add(1);
     }
 
-    /// Rotation trigger 판정. 2^30 warn / 2^31 force.
+    /// Rotation trigger decision. 2^30 warn / 2^31 force.
     ///
-    /// Force threshold 는 2^31 로 설정 — 2^32 birthday bound 도달 전 확실한 margin
-    /// (~50% earlier trigger).
+    /// Force threshold set at 2^31 — clear margin before the 2^32 birthday
+    /// bound (~50% earlier trigger).
     #[must_use]
     pub fn rotation_trigger(&self) -> RotationTrigger {
         const WARN_THRESHOLD: u64 = 1u64 << 30;
@@ -334,7 +333,7 @@ mod pii_seal {
 }
 
 /// Runtime-canonical PII marker — identifies a wire-tagged PII family
-/// (spec §14.9.1 §§1). The trait is **sealed** — only the four canonical
+/// The trait is **sealed** — only the four canonical
 /// marker types in this module implement it. Shell-scoped PII uses the
 /// separate `ShellPiiType` channel with manifest registration.
 ///
@@ -376,7 +375,7 @@ impl PiiType for ActivityExtraBytes {
 /// Supplementary credential secret marker — `PII_CODE = 0x0004`. The
 /// primary `AuthCredential` KDF salt is already per-credential random; this
 /// marker covers auxiliary secret storage kept encrypted alongside the
-/// credential (spec §14.9.1 PII_CODE table).
+/// credential (PII_CODE table).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthCredentialSecret(pub Vec<u8>);
 impl pii_seal::Sealed for AuthCredentialSecret {}
@@ -386,7 +385,7 @@ impl PiiType for AuthCredentialSecret {
 
 // ===================== PiiError =====================
 
-/// Crypto-erasure + PII handling failure taxonomy (spec §14.9.1).
+/// Crypto-erasure + PII handling failure taxonomy.
 ///
 /// The display strings are intentionally brief — public error surfaces
 /// stay opaque; operator-facing detail is logged separately.
@@ -394,7 +393,7 @@ impl PiiType for AuthCredentialSecret {
 #[derive(Debug, thiserror::Error)]
 pub enum PiiError {
     /// Current feature set rejects encryption — the caller is running at
-    /// Tier-0 (default) with no KMS backend wired. Spec §14.9.1 §§12.
+    /// Tier-0 (default) with no KMS backend wired.
     #[error("compliance tier too low for encryption")]
     TierTooLow,
 
@@ -439,12 +438,12 @@ pub enum PiiError {
     /// Per-DEK monotonic counter reached `u64::MAX` — the AES-GCM /
     /// AES-GCM-SIV paths cannot issue another deterministic nonce
     /// without risking reuse. Operator must rotate the DEK before
-    /// further encryption (spec §14.9.1 §§3).
+    /// further encryption.
     #[error("DEK nonce counter exhausted; rotation required")]
     DekExhausted,
 
     /// Shell-scoped PII marker declared a `pii_code` outside the
-    /// reserved `0x0100..=0xFFFF` range (spec §14.9.1 §§1). Canonical
+    /// reserved `0x0100..=0xFFFF` range. Canonical
     /// codes (`0x0001..=0x00FF`) are owned by the sealed [`PiiType`]
     /// trait and cannot be registered through the shell channel.
     #[error("shell PII code outside the 0x0100..=0xFFFF range")]
@@ -452,7 +451,7 @@ pub enum PiiError {
 
     /// Shell manifest tried to register a `pii_code` that another
     /// entry in the same registry already owns. Registration is
-    /// append-only; removals flow through the §14.7 shell sunset
+    /// append-only; removals flow through the shell sunset
     /// policy.
     #[error("shell PII code already registered")]
     ShellPiiAlreadyRegistered,
