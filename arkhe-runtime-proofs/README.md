@@ -3,7 +3,8 @@
 Implementation-level Kani harness for the L1 Action submit / dispatch /
 replay path. Ships a 5-property harness suite covering authorization
 (E6/E7), dispatch determinism (E14), bit-identical replay (A1), wasm
-memory bounds-check, and the PQC Hybrid AND-mode dispatch.
+memory bounds-check, and the PQC Hybrid AND-mode dispatch (mock
+BOOLEAN model — see `kani_hybrid_and_mode_property` rustdoc).
 
 ## Workspace exclusion
 
@@ -55,7 +56,7 @@ for setup overhead).
 | `kani_dispatch_property` | E14 deterministic execution | u32 input, twice-dispatch determinism |
 | `kani_replay_property` | A1 bit-identical replay | k=3 reorder window |
 | `kani_memory_bounds_check_property` | wasm memory firm contract | `read_caller_memory` / `write_caller_memory` symbolic OOB |
-| `kani_hybrid_and_mode_property` | PQC Hybrid AND-mode dispatch | 3 policy variants × 2 ed25519 × 2 mldsa65 = 12 cases |
+| `kani_hybrid_and_mode_property` | PQC Hybrid AND-mode dispatch (mock BOOLEAN verify, not real ML-DSA) | 3 policy variants × 2 ed25519 × 2 mldsa65 = 12 cases |
 
 Each harness uses `#[kani::unwind(8)]` to bound SMT loop depth and
 `kani::assume(...)` for input-domain restriction.

@@ -20,7 +20,9 @@ Feature flags gate the compliance tier:
 - **Tier-1 `tier-1-kms`** — KMS free-tier: Argon2 + XChaCha20-Poly1305.
 - **Tier-2 `tier-2-multi-kms`** — production Multi-KMS + threshold HSM with
   t-of-n Shamir split; adds AES-GCM / AES-GCM-SIV.
-- **`pqc-hybrid`** — post-quantum MlDsa65 + hybrid signing (opt-in).
+- **`pqc-hybrid`** — reserved for L2 attestation MlDsa65 + hybrid signing.
+  Preview scaffolding — flag exists, no direct `ml-dsa` dep wired yet
+  (L0 kernel WAL chain remains Hybrid-signed unchanged).
 - **`unstable`** — opt-in for items outside the stable surface.
 
 ## Key services

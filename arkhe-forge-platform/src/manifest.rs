@@ -64,8 +64,10 @@ pub struct AuditSection {
     /// `"after_60min"` (auto-promote after 60 minutes of health-check
     /// consensus, spec §14.11.2).
     pub kms_auto_promote: String,
-    /// Audit receipt signature class (spec §14.7 E13) — `"ed25519"`,
-    /// `"ml-dsa-65"`, `"hybrid"`.
+    /// Audit receipt signature class (spec §14.7 E13). Active value:
+    /// `"ed25519"`. Reserved values: `"ml-dsa-65"`, `"hybrid"` — wire
+    /// format pinned, forge L2 attestation emits Ed25519 only until the
+    /// `pqc-hybrid` feature is wired in a follow-up release.
     pub signature_class: String,
     /// Compliance tier — `0` (software KEK, dev), `1` (single KMS
     /// free-tier), `2` (production Multi-KMS + threshold HSM).

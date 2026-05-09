@@ -126,4 +126,9 @@ review:
 - Backed by `signature` v3.0 trait crate (RustCrypto)
 - Transient tracking: 0.1.0-rc.X → 0.1.0 → 1.0 stable upgrade path; a
   breaking change at the upgrade point requires a fresh audit entry.
+
+Transitive-only via arkhe-kernel; not invoked directly by forge L2
+(crypto_erasure / hf2_kms emit RuntimeSignatureClass::Ed25519 by
+default in v0.13). Audit covers source-level safety so the L0
+kernel's Hybrid AND-mode dispatch path is audit-clean.
 """

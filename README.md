@@ -7,11 +7,14 @@
 
 A1 D1-Total bit-identical replay carries through from sealed L0 ArkheKernel
 to the runtime boundary. 3-band determinism (Core / Projection / Protocol-
-Correctness) layers on top, the Hybrid Ed25519 + ML-DSA 65 signing pipeline
-is inherited from the kernel, and a WASM-sandboxed hook host with a Kani-
-verified host-fn boundary makes ArkheForge a production runtime stack for
-shell authors (BBS, game, social platform) building on a sealed
-deterministic substrate.
+Correctness) layers on top, the L0 kernel's Hybrid Ed25519 + ML-DSA 65 WAL
+chain signing is inherited unchanged, and a WASM-sandboxed hook host with
+a Kani-verified host-fn boundary makes ArkheForge a production runtime
+stack for shell authors (BBS, game, social platform) building on a sealed
+deterministic substrate. Forge L2's own attestation surfaces (KMS journal,
+audit receipts, manifest declaration) emit Ed25519 by default; the
+`pqc-hybrid` feature flag is preview scaffolding and the `ml-dsa-65` /
+`hybrid` manifest values are reserved for a follow-up release.
 
 ## Quick start
 

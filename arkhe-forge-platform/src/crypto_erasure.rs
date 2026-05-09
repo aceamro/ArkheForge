@@ -166,8 +166,10 @@ pub enum DekShredError {
 }
 
 /// In-memory [`DekShredder`] — deterministic Ed25519-style placeholder
-/// attestation for tests and the Tier-0 harness. Production uses a real
-/// HSM backend and emits an `RuntimeSignatureClass::Hybrid` attestation.
+/// attestation for tests and the Tier-0 harness. Production HSM
+/// backend integration is reserved for the `pqc-hybrid` follow-up
+/// release; all current paths emit
+/// `RuntimeSignatureClass::Ed25519` regardless of compliance tier.
 #[derive(Debug, Default)]
 pub struct InMemoryDekShredder {
     live: HashMap<DekId, ()>,

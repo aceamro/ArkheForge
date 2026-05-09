@@ -20,8 +20,10 @@ First public release of **ArkheForge**, the L1+L2 runtime substrate for
 - Three-tier KMS / AEAD compliance stack with crypto-erasure
   coordination (Tier-0 software-KEK / Tier-1 free-tier / Tier-2
   multi-KMS + threshold HSM).
-- Inherits the Hybrid Ed25519 + ML-DSA 65 signing pipeline (NIST FIPS
-  204) from ArkheKernel.
+- Inherits the Hybrid Ed25519 + ML-DSA 65 WAL chain signing pipeline
+  (NIST FIPS 204) from ArkheKernel. Forge L2 attestation surfaces
+  (KMS journal, audit receipts) emit Ed25519 by default; the
+  `pqc-hybrid` feature flag ships as preview scaffolding.
 - Reference example `card-primitives` — provably-fair Texas Hold'em
   with BLAKE3 commit-reveal, end-to-end Forge L1 + L2 integration, and
   audit-grade WAL round-trip.

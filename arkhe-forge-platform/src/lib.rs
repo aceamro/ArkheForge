@@ -16,7 +16,7 @@
 //! | `tier-2-aws-kms`           | `aws-sdk-kms`, `aws-config`, `tokio` | Orthogonal AWS KMS backend opt-in — `AwsKmsBackend` impl of [`hf2_kms::KmsBackend`]. |
 //! | `tier-2-hook-host-v2`      | `wasmtime`, `wasmtime-wasi` | Hook host v2 wasmtime sandbox — chain-affecting compute path (spec §14.5 / E14.L2-Allow). |
 //! | `tier-2-observer-host-v2`  | `wasmtime`, `wasmtime-wasi` | Observer host v2 wasmtime sandbox — chain-non-affecting side-effect path (spec §14.5.1 / E15). |
-//! | `pqc-hybrid`               | — | MlDsa65 + hybrid signing (opt-in). |
+//! | `pqc-hybrid`               | — | Reserved for L2 MlDsa65 + hybrid attestation (preview scaffolding — no direct `ml-dsa` dep yet; L0 kernel WAL chain signing is unaffected). |
 //! | `unstable`                 | — | Opt-in for items outside the stable surface. |
 //!
 //! Cloud KMS backends are orthogonal to the AEAD tiering — a deployment can
