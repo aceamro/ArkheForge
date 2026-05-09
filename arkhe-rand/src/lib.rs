@@ -96,6 +96,10 @@ impl RngSource {
     /// `Hasher::new_derive_key(KDF_CONTEXT).update(seed).finalize_xof()`.
     /// Two `RngSource` instances built from the same seed produce
     /// byte-identical streams across all targets.
+    ///
+    /// Callers holding seed material in a non-`Zeroizing` buffer
+    /// should wrap it themselves — this constructor only zeroizes the
+    /// internal copy, not the caller's source bytes.
     pub fn from_seed(seed: &[u8; 32]) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(KDF_CONTEXT);
         hasher.update(seed.as_slice());
