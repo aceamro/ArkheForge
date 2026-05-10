@@ -259,12 +259,8 @@ fn roll_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     // Stage 7 — display. Build the chronological row list (prior
     // history + the new roll), then show the bottom DISPLAY_CAP rows.
-    let mut rows: Vec<DisplayRow> = history
-        .iter()
-        .enumerate()
-        .map(|(i, e)| DisplayRow::from_history_entry(e, (i as u64) + 1))
-        .collect();
-    rows.push(DisplayRow::from_new(&new_record, new_tick, chain_hash));
+    let mut rows: Vec<DisplayRow> = history.iter().map(DisplayRow::from_history_entry).collect();
+    rows.push(DisplayRow::from_new(&new_record, chain_hash));
     print_history(&rows, DISPLAY_CAP);
 
     // Stage 8 — performance summary.
@@ -395,12 +391,14 @@ fn read_user_seed(
 /// One row of the display block. Built from either a recovered history
 /// entry or the freshly-rolled record. Holds every metadata field the
 /// user-facing display surfaces (server_seed, commitment, combined_seed,
-/// chain_hash, dice, sum, tick) so `print_history` is purely a
-/// formatter.
+/// chain_hash, dice) so `print_history` is purely a formatter. The
+/// kernel `tick` for each record equals the row's display index in
+/// the single-instance dice example, so it lives in the schema
+/// (`DiceRollLanded.tick`) and the live `[5/5]` banner rather than
+/// being stored here just to be reprinted.
 struct DisplayRow {
     user_input: String,
     dice: [u8; 3],
-    tick: u64,
     server_seed: [u8; 32],
     commitment: [u8; 32],
     combined_seed: [u8; 32],
@@ -408,13 +406,12 @@ struct DisplayRow {
 }
 
 impl DisplayRow {
-    fn from_history_entry(entry: &HistoryEntry, tick: u64) -> Self {
+    fn from_history_entry(entry: &HistoryEntry) -> Self {
         let r = &entry.record;
         let chain_hash = blake3_concat3(DOMAIN_DICE_CHAIN, &r.dice, r.user_input.as_bytes());
         Self {
             user_input: r.user_input.clone(),
             dice: r.dice,
-            tick,
             server_seed: r.server_seed,
             commitment: r.commitment_server,
             combined_seed: r.combined_seed,
@@ -422,11 +419,10 @@ impl DisplayRow {
         }
     }
 
-    fn from_new(r: &RecordDiceRoll, tick: u64, chain_hash: [u8; 32]) -> Self {
+    fn from_new(r: &RecordDiceRoll, chain_hash: [u8; 32]) -> Self {
         Self {
             user_input: r.user_input.clone(),
             dice: r.dice,
-            tick,
             server_seed: r.server_seed,
             commitment: r.commitment_server,
             combined_seed: r.combined_seed,
@@ -449,9 +445,17 @@ fn print_history(rows: &[DisplayRow], cap: usize) {
     for (i, row) in visible.iter().enumerate() {
         let display_idx = start + i + 1;
         let sum: u32 = row.dice.iter().map(|&v| v as u32).sum();
+        // The display index `#N` and the kernel tick are equal in the
+        // single-instance dice example (every roll dispatches at
+        // tick = (history.len() at that point) + 1, mirroring the
+        // record's display position). Showing both side-by-side adds
+        // no information, so the row header drops `tick=` and lets
+        // the leading `#` carry the sequence. The tick remains in the
+        // schema (DiceRollLanded.tick) and surfaces in the live
+        // [5/5] banner for replay-audit cites.
         println!(
-            "  #{}  {}   dice [{}, {}, {}] = {}   tick={}",
-            display_idx, row.user_input, row.dice[0], row.dice[1], row.dice[2], sum, row.tick
+            "  #{}  {}   dice [{}, {}, {}] = {}",
+            display_idx, row.user_input, row.dice[0], row.dice[1], row.dice[2], sum
         );
         println!("       server_seed:    {}", hex32(&row.server_seed));
         println!("       commitment:     {}", hex32(&row.commitment));

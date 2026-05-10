@@ -46,16 +46,20 @@ history + per-stage performance timings print to stdout:
 
 --- Recent history (top 5, oldest first) ---
 
-  #1  Happy   dice [4, 1, 6] = 11   tick=1
+  #1  Happy   dice [4, 1, 6] = 11
        server_seed:    <64 hex chars>
        commitment:     <64 hex chars>
        combined_seed:  <64 hex chars>
        chain_hash:     <64 hex chars>
 ```
 
-The `#` column is a 1-indexed display counter; the kernel-side `tick`
-appears explicitly on the same row. Each record is shown across five
-lines so every hash field lands at full 64-char width — no truncation.
+The `#` column is a 1-indexed display counter; in the single-instance
+dice example the kernel `tick` for each record equals its `#`, so the
+row header omits it to avoid duplicating the same number twice. The
+tick remains in the schema (`DiceRollLanded.tick`) and surfaces in
+the live `[5/5]` banner for replay-audit purposes. Each record is
+shown across five lines so every hash field lands at full 64-char
+width — no truncation.
 
 ## Performance
 
