@@ -13,34 +13,75 @@ and prints the most recent five rolls in chronological order.
 cargo run -p dice-forge
 ```
 
-The binary prompts:
+Each launch prints a stage-by-stage banner as the protocol unfolds.
+Type any non-empty UTF-8 string up to 256 bytes at the
+`User contribution:` prompt (the cap keeps the postcard payload size
+predictable). The roll is dispatched through the forge runtime, the
+WAL is rewritten with the full canonical history, and the recent
+history + per-stage performance timings print to stdout:
 
 ```
-Commitment (server-side, broadcast pre-roll): <64 hex chars>
-Enter your seed: Happy
+=== arkhe-forge dice — provably-fair demo ===
+
+[1/5] Server commits seed (BLAKE3 of OS entropy):
+      server_seed (revealed): <64 hex chars>
+      commitment:             <64 hex chars>
+
+[2/5] User contribution: "Happy" (5 bytes UTF-8)
+
+[3/5] Combined seed (replay-deterministic):
+      formula:       BLAKE3(domain || server_seed || "Happy" || nonce=0)
+      combined_seed: <64 hex chars>
+
+[4/5] Roll 3D6:
+      dice [4, 1, 6] = 11
+
+[5/5] Reveal + verify:
+      OK  commitment match
+      OK  combined seed recompute match
+      OK  dice replay match
+      chain_hash:     <64 hex chars>
+      kernel tick:    1
+      schema_version: 2
+
+--- Recent history (top 5, oldest first) ---
+
+  #1  Happy   dice [4, 1, 6] = 11   tick=1
+       server_seed:    <64 hex chars>
+       commitment:     <64 hex chars>
+       combined_seed:  <64 hex chars>
+       chain_hash:     <64 hex chars>
 ```
 
-Type any non-empty UTF-8 string up to 256 bytes (the cap keeps the
-postcard payload size predictable). The roll is dispatched through the
-forge runtime, the WAL is rewritten with the full canonical history,
-and a table of the most recent five rolls prints to stdout:
+The `#` column is a 1-indexed display counter; the kernel-side `tick`
+appears explicitly on the same row. Each record is shown across five
+lines so every hash field lands at full 64-char width — no truncation.
+
+## Performance
+
+Every roll prints per-stage wall-clock timings + an aggregate "rolls
+per second" estimate after the history block:
 
 ```
-─── Recent history (top 5) ─────────────────────────────────────
-┌──────┬────────────────┬─────────────┬─────┬────────────┐
-│  #   │ user_input     │ dice        │ sum │ chain_hash │
-├──────┼────────────────┼─────────────┼─────┼────────────┤
-│    1 │ Lucky          │ [3,5,2]     │  10 │ b13a8e51… │
-│    2 │ Yolo           │ [6,6,3]     │  15 │ c24b9f62… │
-│    3 │ Test           │ [2,4,5]     │  11 │ d35cab73… │
-│    4 │ ABCabc         │ [5,3,1]     │   9 │ e46eaaf4… │
-│    5 │ Happy          │ [4,1,6]     │  11 │ a02f9da8… │  ← NEW
-└──────┴────────────────┴─────────────┴─────┴────────────┘
+--- Performance ---
+
+  Stage timings (this run):
+    [1] server commit:        92 μs
+    [2] user input (stdin):   N/A (interactive blocking)
+    [3] combined seed:        8 μs
+    [4] roll 3D6:             33 μs
+    [5] verify + dispatch:    436 μs
+    [6] WAL write + flush:    214 μs
+    Total compute (excl. stdin): 785 μs
+    Throughput equivalent:    ~1273 rolls/sec (excl. stdin)
+
+WAL: 2 record(s), 518 bytes (dice.wal)
 ```
 
-The `#` column is a 1-indexed display counter. The kernel-side `tick`
-field is preserved in the WAL but hidden from this view; `--verify`
-reports it in addition to the byte-equality check.
+`Instant` readings are display-only — they never feed back into the
+compute path, so replay determinism is unaffected. Stage 5 cost grows
+with history length (each prior record is re-dispatched on every
+launch); stage 6 cost grows with WAL byte size.
 
 ## Reset
 

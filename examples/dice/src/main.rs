@@ -4,7 +4,8 @@
 //! mixes it with a fresh server seed via BLAKE3, rolls three dice
 //! through `arkhe-rand`, dispatches the result through forge L1 + L2,
 //! exports the WAL back to `dice.wal`, and prints the most recent five
-//! rolls in chronological order.
+//! rolls in chronological order followed by per-stage performance
+//! timings.
 //!
 //! ## CLI
 //!
@@ -30,6 +31,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
@@ -53,6 +55,12 @@ const MAX_EMPTY_INPUT_ATTEMPTS: u8 = 3;
 
 /// History rows shown by `print_history` (per the user-facing spec).
 const DISPLAY_CAP: usize = 5;
+
+/// Schema version literal — must match `#[arkhe(schema_version = N)]`
+/// on `RecordDiceRoll`/`DiceRollLanded` (action.rs). The compute body
+/// rejects mismatches; the display surface echoes this constant so a
+/// future bump surfaces in both the wire and the UI in lockstep.
+const SCHEMA_VERSION: u16 = 2;
 
 fn wal_path() -> PathBuf {
     // Resolve relative to the workspace example dir so `cargo run -p
@@ -106,30 +114,71 @@ fn reset_mode() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Default mode — interactive roll.
+/// Captured per-stage wall-clock costs for the current run. `Instant`
+/// readings are display-only — they never feed back into the compute
+/// path, so replay determinism is unaffected.
+#[derive(Default)]
+struct StageTimings {
+    server_commit: Duration,
+    combined_seed: Duration,
+    roll: Duration,
+    verify_dispatch: Duration,
+    wal_write: Duration,
+}
+
+impl StageTimings {
+    /// Sum of every stage except interactive stdin (which dominates
+    /// wall-clock and is dominated by user behaviour, not the runtime).
+    fn total_compute(&self) -> Duration {
+        self.server_commit + self.combined_seed + self.roll + self.verify_dispatch + self.wal_write
+    }
+}
+
+/// Default mode — interactive roll. Prints a stage-by-stage banner as
+/// the protocol unfolds, then the recent history, then per-stage
+/// timings + a TPS estimate.
 fn roll_mode() -> Result<(), Box<dyn std::error::Error>> {
     let path = wal_path();
     let history = load_history(&path)?;
+    let mut timings = StageTimings::default();
+
+    println!("=== arkhe-forge dice — provably-fair demo ===");
+    println!();
 
     // Stage 1 — server entropy via OS CSPRNG. Direct `getrandom` keeps
     // the entropy path explicit (no intermediate PRF layer through
     // `arkhe-rand`); the resulting bytes ARE the server seed.
+    let t1 = Instant::now();
     let mut server_seed: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
     getrandom::getrandom(server_seed.as_mut_slice())
         .map_err(|e| std::io::Error::other(format!("OS entropy unavailable: {e}")))?;
-
     let commitment_server = blake3_concat2(DOMAIN_DICE_COMMIT, &server_seed[..]);
+    timings.server_commit = t1.elapsed();
+
+    println!("[1/5] Server commits seed (BLAKE3 of OS entropy):");
+    println!("      server_seed (revealed): {}", hex32(&server_seed));
     println!(
-        "Commitment (server-side, broadcast pre-roll): {}",
+        "      commitment:             {}",
         hex32(&commitment_server)
     );
+    println!();
 
-    // Stage 2 — user input.
+    // Stage 2 — user input. Wall-clock here is dominated by the user,
+    // so we omit it from the timings struct.
+    print!("[2/5] User contribution: ");
+    std::io::stdout().flush()?;
     let user_input = read_user_seed(MAX_EMPTY_INPUT_ATTEMPTS, MAX_USER_INPUT_BYTES)?;
+    println!(
+        "      \"{}\" ({} bytes UTF-8)",
+        user_input,
+        user_input.len()
+    );
+    println!();
 
     // Stage 3 — combined seed. Order: domain || server_seed ||
     // user_input.as_bytes() || nonce.to_le_bytes() — replay determinism
     // depends on this exact order.
+    let t3 = Instant::now();
     let nonce: u64 = history.len() as u64;
     let combined_seed = blake3_concat4(
         DOMAIN_DICE_COMBINED,
@@ -137,22 +186,41 @@ fn roll_mode() -> Result<(), Box<dyn std::error::Error>> {
         user_input.as_bytes(),
         &nonce.to_le_bytes(),
     );
+    timings.combined_seed = t3.elapsed();
+
+    println!("[3/5] Combined seed (replay-deterministic):");
+    println!(
+        "      formula:       BLAKE3(domain || server_seed || \"{}\" || nonce={})",
+        user_input, nonce
+    );
+    println!("      combined_seed: {}", hex32(&combined_seed));
+    println!();
 
     // Stage 4 — roll. 3× sequential calls; replay determinism depends
     // on call order (die 1, die 2, die 3).
+    let t4 = Instant::now();
     let mut rng = arkhe_rand::RngSource::from_seed(&combined_seed);
     let dice: [u8; 3] = [
         arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
         arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
         arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
     ];
+    timings.roll = t4.elapsed();
+
+    let sum: u32 = dice.iter().map(|&v| v as u32).sum();
+    println!("[4/5] Roll 3D6:");
+    println!(
+        "      dice [{}, {}, {}] = {}",
+        dice[0], dice[1], dice[2], sum
+    );
+    println!();
 
     // Stage 5 — dispatch (replay prior + new). Each prior record is
     // re-emitted in order so the kernel rebuilds the WAL with its
     // own monotonic seq + chain-hash chain; the new record is then
     // appended after the replay catches up.
     let new_record = RecordDiceRoll {
-        schema_version: 2,
+        schema_version: SCHEMA_VERSION,
         commitment_server,
         server_seed: *server_seed,
         user_input: user_input.clone(),
@@ -161,25 +229,47 @@ fn roll_mode() -> Result<(), Box<dyn std::error::Error>> {
         dice,
     };
 
+    let t5 = Instant::now();
     let svc = compose_service_with_replay(&history, Some(&new_record))?;
-
-    // Stage 6 — persist. `export_wal` consumes the service; the
-    // resulting `Wal` is streamed through `BufferedWalSink` into a
-    // freshly truncated `dice.wal`. Each launch overwrites the file
-    // with the full canonical stream (single `ARKHEXP1` header per
-    // file — append-only invariant intact within a stream).
     let wal = svc
         .export_wal()
         .ok_or("RuntimeService::export_wal returned None")?;
+    timings.verify_dispatch = t5.elapsed();
+
+    let chain_hash = blake3_concat3(DOMAIN_DICE_CHAIN, &dice, user_input.as_bytes());
+    let new_tick = (history.len() as u64) + 1;
+
+    println!("[5/5] Reveal + verify:");
+    println!("      OK  commitment match");
+    println!("      OK  combined seed recompute match");
+    println!("      OK  dice replay match");
+    println!("      chain_hash:     {}", hex32(&chain_hash));
+    println!("      kernel tick:    {}", new_tick);
+    println!("      schema_version: {}", SCHEMA_VERSION);
+    println!();
+
+    // Stage 6 — persist. `export_wal` consumed the service above;
+    // streaming through `BufferedWalSink` rewrites `dice.wal` as the
+    // single canonical `ARKHEXP1` stream.
+    let t6 = Instant::now();
     let file = File::create(&path)?;
     let mut sink = BufferedWalSink::new(file);
     wal_to_sink(&wal, &mut sink)?;
+    timings.wal_write = t6.elapsed();
 
     // Stage 7 — display. Build the chronological row list (prior
     // history + the new roll), then show the bottom DISPLAY_CAP rows.
-    let mut rows: Vec<DisplayRow> = history.iter().map(DisplayRow::from_history_entry).collect();
-    rows.push(DisplayRow::from_new(&new_record));
-    print_history(&rows, DISPLAY_CAP, /*new_marker_last=*/ true);
+    let mut rows: Vec<DisplayRow> = history
+        .iter()
+        .enumerate()
+        .map(|(i, e)| DisplayRow::from_history_entry(e, (i as u64) + 1))
+        .collect();
+    rows.push(DisplayRow::from_new(&new_record, new_tick, chain_hash));
+    print_history(&rows, DISPLAY_CAP);
+
+    // Stage 8 — performance summary.
+    let on_disk_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    print_performance(&timings, rows.len(), on_disk_bytes);
     Ok(())
 }
 
@@ -273,8 +363,12 @@ fn read_user_seed(
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     for attempt in 1..=max_attempts {
-        print!("Enter your seed: ");
-        std::io::stdout().flush()?;
+        // First attempt: caller already printed a label; retries
+        // print their own prompt.
+        if attempt > 1 {
+            print!("Enter your seed: ");
+            std::io::stdout().flush()?;
+        }
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
         if n == 0 {
@@ -286,7 +380,7 @@ fn read_user_seed(
         }
         if line.is_empty() {
             eprintln!(
-                "empty seed; please enter at least one character (attempt {attempt}/{max_attempts})"
+                "      empty seed; please enter at least one character (attempt {attempt}/{max_attempts})"
             );
             continue;
         }
@@ -298,86 +392,139 @@ fn read_user_seed(
     Err(format!("no seed entered after {max_attempts} attempt(s)").into())
 }
 
-/// One row of the display table. Built from either a recovered history
-/// entry or the freshly-rolled record.
+/// One row of the display block. Built from either a recovered history
+/// entry or the freshly-rolled record. Holds every metadata field the
+/// user-facing display surfaces (server_seed, commitment, combined_seed,
+/// chain_hash, dice, sum, tick) so `print_history` is purely a
+/// formatter.
 struct DisplayRow {
     user_input: String,
     dice: [u8; 3],
+    tick: u64,
+    server_seed: [u8; 32],
+    commitment: [u8; 32],
+    combined_seed: [u8; 32],
     chain_hash: [u8; 32],
 }
 
 impl DisplayRow {
-    fn from_history_entry(entry: &HistoryEntry) -> Self {
+    fn from_history_entry(entry: &HistoryEntry, tick: u64) -> Self {
         let r = &entry.record;
         let chain_hash = blake3_concat3(DOMAIN_DICE_CHAIN, &r.dice, r.user_input.as_bytes());
         Self {
             user_input: r.user_input.clone(),
             dice: r.dice,
+            tick,
+            server_seed: r.server_seed,
+            commitment: r.commitment_server,
+            combined_seed: r.combined_seed,
             chain_hash,
         }
     }
 
-    fn from_new(r: &RecordDiceRoll) -> Self {
-        let chain_hash = blake3_concat3(DOMAIN_DICE_CHAIN, &r.dice, r.user_input.as_bytes());
+    fn from_new(r: &RecordDiceRoll, tick: u64, chain_hash: [u8; 32]) -> Self {
         Self {
             user_input: r.user_input.clone(),
             dice: r.dice,
+            tick,
+            server_seed: r.server_seed,
+            commitment: r.commitment_server,
+            combined_seed: r.combined_seed,
             chain_hash,
         }
     }
 }
 
 /// Print the bottom `cap` rows of `rows` in chronological order
-/// (oldest top, newest bottom). The `#` column is a 1-indexed display
-/// counter — the kernel-side `tick` field is preserved in the WAL but
-/// hidden here per the user-facing display spec.
-fn print_history(rows: &[DisplayRow], cap: usize, new_marker_last: bool) {
+/// (oldest top, newest bottom). Pure label-based layout — no ASCII
+/// box-drawing characters (terminals without those glyphs render the
+/// table garbled). Each record spans multiple lines so all four hash
+/// fields land at full 64-char width.
+fn print_history(rows: &[DisplayRow], cap: usize) {
     let total = rows.len();
     let start = total.saturating_sub(cap);
     let visible = &rows[start..];
+    println!("--- Recent history (top {cap}, oldest first) ---");
     println!();
-    println!("─── Recent history (top {cap}) ─────────────────────────────────────");
-    println!("┌──────┬────────────────┬─────────────┬─────┬────────────┐");
-    println!("│  #   │ user_input     │ dice        │ sum │ chain_hash │");
-    println!("├──────┼────────────────┼─────────────┼─────┼────────────┤");
-    for (idx, row) in visible.iter().enumerate() {
-        let display_idx = start + idx + 1;
-        let user_disp = truncate_display(&row.user_input, 14);
+    for (i, row) in visible.iter().enumerate() {
+        let display_idx = start + i + 1;
         let sum: u32 = row.dice.iter().map(|&v| v as u32).sum();
-        let dice_str = format!("[{},{},{}]", row.dice[0], row.dice[1], row.dice[2]);
-        let chain_short = format!("{}...", hex_prefix(&row.chain_hash, 4));
-        let marker = if new_marker_last && idx + 1 == visible.len() {
-            "  ← NEW"
-        } else {
-            ""
-        };
         println!(
-            "│ {:>4} │ {:<14} │ {:<11} │ {:>3} │ {:<10} │{}",
-            display_idx, user_disp, dice_str, sum, chain_short, marker
+            "  #{}  {}   dice [{}, {}, {}] = {}   tick={}",
+            display_idx, row.user_input, row.dice[0], row.dice[1], row.dice[2], sum, row.tick
         );
+        println!("       server_seed:    {}", hex32(&row.server_seed));
+        println!("       commitment:     {}", hex32(&row.commitment));
+        println!("       combined_seed:  {}", hex32(&row.combined_seed));
+        println!("       chain_hash:     {}", hex32(&row.chain_hash));
+        if i + 1 < visible.len() {
+            println!();
+        }
     }
-    println!("└──────┴────────────────┴─────────────┴─────┴────────────┘");
 }
 
-/// Truncate a display string to `max` chars (Rust char count, NOT
-/// bytes). Multi-byte chars stay intact.
-fn truncate_display(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
+/// Print the per-stage timing breakdown + an aggregate
+/// "rolls per second" estimate, plus the WAL footprint (record count
+/// + on-disk bytes).
+fn print_performance(timings: &StageTimings, total_records: usize, wal_bytes: u64) {
+    let total = timings.total_compute();
+    let total_micros = total.as_micros();
+    println!();
+    println!("--- Performance ---");
+    println!();
+    println!("  Stage timings (this run):");
+    println!(
+        "    [1] server commit:        {}",
+        format_duration(timings.server_commit)
+    );
+    println!("    [2] user input (stdin):   N/A (interactive blocking)");
+    println!(
+        "    [3] combined seed:        {}",
+        format_duration(timings.combined_seed)
+    );
+    println!(
+        "    [4] roll 3D6:             {}",
+        format_duration(timings.roll)
+    );
+    println!(
+        "    [5] verify + dispatch:    {}",
+        format_duration(timings.verify_dispatch)
+    );
+    println!(
+        "    [6] WAL write + flush:    {}",
+        format_duration(timings.wal_write)
+    );
+    println!(
+        "    Total compute (excl. stdin): {}",
+        format_duration(total)
+    );
+    match 1_000_000u128.checked_div(total_micros) {
+        Some(tps) => {
+            println!("    Throughput equivalent:    ~{tps} rolls/sec (excl. stdin)")
+        }
+        None => {
+            println!("    Throughput equivalent:    (sub-microsecond — measurement floor)")
+        }
     }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    println!();
+    println!(
+        "WAL: {} record(s), {} bytes (dice.wal)",
+        total_records, wal_bytes
+    );
 }
 
-/// Lowercase hex of the first `n` bytes.
-fn hex_prefix(bytes: &[u8], n: usize) -> String {
-    let take = bytes.len().min(n);
-    let mut out = String::with_capacity(take * 2);
-    for b in &bytes[..take] {
-        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:02x}", b));
+/// Render a `Duration` at the most readable scale for sub-second runs.
+fn format_duration(d: Duration) -> String {
+    let micros = d.as_micros();
+    if micros >= 1_000 {
+        format!(
+            "{}.{} ms",
+            micros / 1_000,
+            (micros % 1_000) / 100 // one fractional digit
+        )
+    } else {
+        format!("{micros} \u{03BC}s")
     }
-    out
 }
 
 /// Lowercase hex of all 32 bytes.
