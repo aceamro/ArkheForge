@@ -131,7 +131,7 @@ Eleven crates total — 10 workspace members + 1 standalone Kani harness:
 | `arkhe-trait-default-check`    | CI          | Sealed-trait safeguard lint                |
 | `arkhe-subset-rust-check`      | CI          | `Action::compute()` determinism subset lint|
 | `card-primitives`              | examples/   | Provably-fair Hold'em 9-stage demo (card / deck / hand_eval / shuffle_proof / forge_integration / main + Forge L2 `RuntimeService` dispatch + WAL export + streaming round-trip) + GLI-19 §3.2.5 RNG bias compliance (Lemire via `arkhe-rand`) + NIST SP 800-22 14-test + Forge L1 `ArkheAction`/`ArkheEvent` + Forge L2 `Kernel::submit`/`step` end-to-end reference integration |
-| `dice-forge`                   | examples/   | Provably-fair 3D6 dice demo — server commit + interactive user-seed combined PRF + arkhe-rand `RngSource` + Forge L1+L2 dispatch + `BufferedWalSink` persistence with chronological multi-run history (`dice.wal` rewritten each launch, top-5 display) + `--reset`/`--verify` CLI |
+| `dice`                         | examples/   | Provably-fair 3D6 dice demo — server commit + interactive user-seed combined PRF + arkhe-rand `RngSource` + Forge L1+L2 dispatch + `BufferedWalSink` persistence with chronological multi-run history (`dice.wal` rewritten each launch, top-5 display) + `--reset`/`--verify` CLI |
 | `arkhe-runtime-proofs`         | proof       | Kani 5-property harness (standalone)       |
 
 ## Determinism guarantees

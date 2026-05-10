@@ -1,4 +1,4 @@
-//! `dice-forge` — provably-fair 3D6 dice example.
+//! `dice` — provably-fair 3D6 dice example.
 //!
 //! Each launch reads `dice.wal` (if any), prompts for a user seed,
 //! mixes it with a fresh server seed via BLAKE3, rolls three dice
@@ -9,9 +9,9 @@
 //!
 //! ## CLI
 //!
-//! - `cargo run -p dice-forge`            — interactive roll mode
-//! - `cargo run -p dice-forge -- --reset` — delete `dice.wal`
-//! - `cargo run -p dice-forge -- --verify` — replay-equivalence check
+//! - `cargo run -p dice`            — interactive roll mode
+//! - `cargo run -p dice -- --reset` — delete `dice.wal`
+//! - `cargo run -p dice -- --verify` — replay-equivalence check
 //!
 //! ## Why both server and user contribute
 //!
@@ -64,7 +64,7 @@ const SCHEMA_VERSION: u16 = 2;
 
 fn wal_path() -> PathBuf {
     // Resolve relative to the workspace example dir so `cargo run -p
-    // dice-forge` from any cwd lands in the same file.
+    // dice` from any cwd lands in the same file.
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("dice.wal");
     p
@@ -84,7 +84,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("dice-forge: {e}");
+            eprintln!("dice: {e}");
             ExitCode::FAILURE
         }
     }
@@ -92,12 +92,12 @@ fn main() -> ExitCode {
 
 fn print_help() {
     println!(
-        "dice-forge — provably-fair 3D6 dice example\n\
+        "dice — provably-fair 3D6 dice example\n\
          \n\
          Usage:\n  \
-         cargo run -p dice-forge            # interactive roll\n  \
-         cargo run -p dice-forge -- --reset # delete dice.wal\n  \
-         cargo run -p dice-forge -- --verify # replay-equivalence check"
+         cargo run -p dice            # interactive roll\n  \
+         cargo run -p dice -- --reset # delete dice.wal\n  \
+         cargo run -p dice -- --verify # replay-equivalence check"
     );
 }
 

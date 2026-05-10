@@ -1,4 +1,4 @@
-# dice-forge
+# dice
 
 A provably-fair 3D6 dice example built on the ArkheForge L1 + L2 stack.
 Each launch reads any prior `dice.wal`, prompts for a user seed, mixes
@@ -10,7 +10,7 @@ and prints the most recent five rolls in chronological order.
 ## Run
 
 ```sh
-cargo run -p dice-forge
+cargo run -p dice
 ```
 
 Each launch prints a stage-by-stage banner as the protocol unfolds.
@@ -86,7 +86,7 @@ launch); stage 6 cost grows with WAL byte size.
 ## Reset
 
 ```sh
-cargo run -p dice-forge -- --reset
+cargo run -p dice -- --reset
 ```
 
 Deletes `examples/dice/dice.wal` (no-op if absent). The next launch
@@ -95,7 +95,7 @@ starts with an empty history.
 ## Verify
 
 ```sh
-cargo run -p dice-forge -- --verify
+cargo run -p dice -- --verify
 ```
 
 Reads every record from `dice.wal`, re-dispatches them through a fresh

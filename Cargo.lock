@@ -1262,7 +1262,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dice-forge"
+name = "dice"
 version = "0.13.0"
 dependencies = [
  "arkhe-forge-core",
