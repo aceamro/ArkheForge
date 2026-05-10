@@ -8,15 +8,17 @@
 //!   revealed — verifiers recompute the commitment and reproduce the
 //!   shuffle to confirm the dealer could not have changed the deck
 //!   ordering after committing.
-//! - **`ProofRng` = BLAKE3 keyed-PRF mode.** `Hasher::new_keyed(&seed)`
-//!   plus a 64-bit counter feeds an XOF buffer that supplies
-//!   `RngCore::next_u32` / `next_u64` / `fill_bytes`. Cryptographically
-//!   equivalent to ChaCha20-style stream RNG for binding purposes;
-//!   reuses the workspace `blake3` dep instead of pulling `rand_chacha`.
+//! - **PRNG = `arkhe_rand::RngSource`.** BLAKE3 KDF mode (context tag
+//!   `"arkhe-rand stream v0.13"`) drives a single continuous XOF stream
+//!   for the shuffle. Cryptographically equivalent to ChaCha20-style
+//!   stream RNG for binding purposes; the audited `arkhe-rand` crate
+//!   centralises the keyed-PRNG primitive once for all shell-side
+//!   consumers (Zeroize seed, redacted Debug, sealed RandInt trait).
 //! - **Domain separation.** Every BLAKE3 site uses a distinct ASCII
 //!   prefix so the same byte string cannot serve two protocol roles:
-//!   `commit::`, `rng::`, `showdown::`. Cross-protocol substitution
-//!   attacks structurally cannot apply.
+//!   `commit::`, `showdown::`, plus the arkhe-rand KDF context for the
+//!   PRNG channel. Cross-protocol substitution attacks structurally
+//!   cannot apply.
 //! - **`verify_shuffle` = pure function.** No `&mut` state, no I/O,
 //!   no heap; deterministic in its inputs. Compatible with the runtime
 //!   `#[arkhe_pure]` attribute (anyone-runnable; no dealer trust).
@@ -28,14 +30,15 @@
 //!   as `Card`, `Deck`, `HandRank` — domain-correct hashing must go
 //!   through the explicit BLAKE3 sites here, not through the impl-
 //!   defined `core::hash::Hash` derive.
-//! - **`ProofRng: ZeroizeOnDrop`** — best-effort scrub of the seed
-//!   key, counter, and 64-byte XOF buffer when the RNG is dropped.
-//!   `ShuffleCommitment` is intentionally **not** zeroized: the
-//!   commitment digest is broadcast publicly, so memory residue carries
-//!   no extra disclosure. The `Hasher` instance inside
-//!   `ShuffleCommitment::from_seed` is short-lived and not zeroized
-//!   today; production hardening (a `blake3::Hasher: Zeroize` upstream
-//!   feature) is a follow-on carry.
+//! - **PRNG seed scrubbing.** `arkhe_rand::RngSource` zeroizes its
+//!   internal seed via `Zeroizing<[u8; 32]>` and replaces its XOF
+//!   reader with a sentinel on drop, so seed material from the verifier
+//!   path is wiped automatically. `ShuffleCommitment` is intentionally
+//!   **not** zeroized: the commitment digest is broadcast publicly, so
+//!   memory residue carries no extra disclosure. The `Hasher` instance
+//!   inside `ShuffleCommitment::from_seed` is short-lived and not
+//!   zeroized today; production hardening (a `blake3::Hasher: Zeroize`
+//!   upstream feature) is a follow-on carry.
 //! - **Type-strengthened commitment.** `ShuffleCommitment(blake3::Hash)`
 //!   inherits `blake3::Hash`'s constant-time `PartialEq` (see the
 //!   pattern in `arkhe-forge-platform/src/wasm_runtime_common/register_module.rs`).
@@ -54,9 +57,8 @@
 
 use core::fmt;
 
+use arkhe_rand::RngSource;
 use blake3::Hasher;
-use rand_core::RngCore;
-use zeroize::ZeroizeOnDrop;
 
 use crate::card::Card;
 use crate::deck::Deck;
@@ -64,8 +66,6 @@ use crate::hand_eval::HandRank;
 
 /// Domain-separation tag for `ShuffleCommitment` BLAKE3 input.
 const DOMAIN_COMMIT: &[u8] = b"arkhe-forge::shuffle_proof::v1::commit::";
-/// Domain-separation tag for `ProofRng` keyed-PRF expansion.
-const DOMAIN_RNG: &[u8] = b"arkhe-forge::shuffle_proof::v1::rng::";
 /// Domain-separation tag for `ShowdownReceipt` BLAKE3 anchor.
 const DOMAIN_SHOWDOWN: &[u8] = b"arkhe-forge::shuffle_proof::v1::showdown::";
 
@@ -122,112 +122,6 @@ impl ShuffleCommitment {
 }
 
 // =========================================================================
-// ProofRng — BLAKE3 keyed-PRF as RngCore
-// =========================================================================
-
-/// Deterministic, seed-driven `RngCore` backed by BLAKE3 keyed-PRF mode.
-///
-/// `from_seed([u8; 32])` initializes the PRF; subsequent `next_u32` /
-/// `next_u64` / `fill_bytes` calls draw bytes from a 64-byte buffer
-/// that is refilled on demand by hashing `(seed-key, counter)`. The
-/// counter increments per refill, so the output stream is the
-/// concatenation of `BLAKE3-keyed(seed, DOMAIN_RNG || counter_le)`
-/// finalize-XOF outputs.
-///
-/// **Two complementary security properties:**
-///
-/// - *PRF security from keyed mode.* `Hasher::new_keyed(&seed)` makes
-///   the output indistinguishable from random for any computationally
-///   bounded adversary that does not learn the seed. This is the
-///   classical PRF guarantee — it bounds *what an attacker can predict*
-///   given the public commitment alone.
-/// - *Intra-protocol substitution defense from `DOMAIN_RNG`.* The
-///   prefix `b"arkhe-forge::shuffle_proof::v1::rng::"` ensures that
-///   the same `(seed, counter)` pair feeding a hypothetical second
-///   sub-protocol (e.g. signing nonce derivation) cannot be replayed
-///   into the RNG channel — the domain tag forces a different output
-///   space. This is *not* a confidentiality property; it prevents
-///   cross-channel substitution attacks within a multi-protocol
-///   system.
-///
-/// `ZeroizeOnDrop` derive: best-effort scrub of `key` + `counter` +
-/// `buffer` + `pos` when the RNG is dropped.
-#[derive(ZeroizeOnDrop)]
-pub struct ProofRng {
-    key: [u8; 32],
-    counter: u64,
-    buffer: [u8; 64],
-    pos: usize,
-}
-
-impl ProofRng {
-    /// Build a `ProofRng` from a 32-byte seed.
-    pub fn from_seed(seed: [u8; 32]) -> Self {
-        Self {
-            key: seed,
-            counter: 0,
-            buffer: [0; 64],
-            pos: 64, // force refill on first use
-        }
-    }
-
-    fn refill(&mut self) {
-        let mut h = Hasher::new_keyed(&self.key);
-        h.update(DOMAIN_RNG);
-        h.update(&self.counter.to_le_bytes());
-        let mut xof = h.finalize_xof();
-        xof.fill(&mut self.buffer);
-        self.counter = self.counter.wrapping_add(1);
-        self.pos = 0;
-    }
-
-    fn read_byte(&mut self) -> u8 {
-        if self.pos >= self.buffer.len() {
-            self.refill();
-        }
-        let b = self.buffer[self.pos];
-        self.pos += 1;
-        b
-    }
-}
-
-impl RngCore for ProofRng {
-    fn next_u32(&mut self) -> u32 {
-        let b0 = self.read_byte();
-        let b1 = self.read_byte();
-        let b2 = self.read_byte();
-        let b3 = self.read_byte();
-        u32::from_le_bytes([b0, b1, b2, b3])
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        // Little-endian concatenation of two consecutive `next_u32`
-        // calls: the **first** call supplies the low 32 bits, the
-        // **second** call supplies the high 32 bits. This ordering
-        // matches the byte stream a caller would observe by issuing
-        // two back-to-back `next_u32` invocations and concatenating
-        // them little-endian — i.e. swapping `next_u64` for two
-        // `next_u32`s does not desynchronize the underlying counter
-        // and XOF buffer. The invariant is pinned by the
-        // `proof_rng_next_u64_consistent_with_next_u32` test.
-        let lo = self.next_u32() as u64;
-        let hi = self.next_u32() as u64;
-        (hi << 32) | lo
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        for slot in dest.iter_mut() {
-            *slot = self.read_byte();
-        }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-// =========================================================================
 // verify_shuffle
 // =========================================================================
 
@@ -241,7 +135,7 @@ pub enum ProofError {
     CommitmentMismatch,
     /// The revealed seed produces a deck order that does not match the
     /// dealer-broadcast deck — the shuffle was not produced by
-    /// `Deck::standard().shuffle(ProofRng::from_seed(seed))`.
+    /// `Deck::standard().shuffle(RngSource::from_seed(&seed))`.
     DeckMismatch,
 }
 
@@ -259,7 +153,7 @@ impl fmt::Display for ProofError {
 }
 
 /// Pure verifier (Deck-facing) — checks that `expected_deck` is the
-/// canonical outcome of `Deck::standard().shuffle(ProofRng::from_seed(*revealed_seed))`
+/// canonical outcome of `Deck::standard().shuffle(RngSource::from_seed(revealed_seed))`
 /// AND that `commitment` was honestly bound to that seed.
 ///
 /// Use this when the verifier holds the post-shuffle [`Deck`] state
@@ -285,7 +179,7 @@ pub fn verify_shuffle(
     }
     // Stage 2 — replay reproducibility: deal the deck from scratch
     // using the revealed seed and verify the order matches verbatim.
-    let mut rng = ProofRng::from_seed(*revealed_seed);
+    let mut rng = RngSource::from_seed(revealed_seed);
     let mut replay = Deck::standard();
     replay.shuffle(&mut rng);
     if &replay != expected_deck {
@@ -321,7 +215,7 @@ pub fn verify_shuffle_order(
     }
     // Stage 2 — replay reproducibility: deal the deck from scratch and
     // compare the canonical byte order. Cursor state is irrelevant.
-    let mut rng = ProofRng::from_seed(*revealed_seed);
+    let mut rng = RngSource::from_seed(revealed_seed);
     let mut replay = Deck::standard();
     replay.shuffle(&mut rng);
     let mut replay_order = [0u8; 52];
@@ -459,63 +353,11 @@ mod tests {
         assert_ne!(c0, c_n);
     }
 
-    // --- ProofRng ---
-
-    #[test]
-    fn proof_rng_deterministic() {
-        let seed = nontrivial_seed();
-        let mut rng_a = ProofRng::from_seed(seed);
-        let mut rng_b = ProofRng::from_seed(seed);
-        for _ in 0..100 {
-            assert_eq!(rng_a.next_u32(), rng_b.next_u32());
-        }
-    }
-
-    #[test]
-    fn proof_rng_different_seeds_diverge() {
-        let mut rng_a = ProofRng::from_seed(fixed_seed(0));
-        let mut rng_b = ProofRng::from_seed(fixed_seed(1));
-        // Across 64 draws at least one must differ — the probability of
-        // 64 collisions is 2^-2048.
-        let mut diverged = false;
-        for _ in 0..64 {
-            if rng_a.next_u32() != rng_b.next_u32() {
-                diverged = true;
-                break;
-            }
-        }
-        assert!(diverged, "distinct seeds must diverge within 64 draws");
-    }
-
-    #[test]
-    fn proof_rng_fill_bytes_smoke() {
-        let mut rng = ProofRng::from_seed(nontrivial_seed());
-        let mut buf = [0u8; 200];
-        rng.fill_bytes(&mut buf);
-        // Sanity: the buffer is not all zero (≪ 2^-1000 probability for
-        // a real PRF).
-        assert!(buf.iter().any(|&b| b != 0));
-    }
-
-    #[test]
-    fn proof_rng_next_u64_consistent_with_next_u32() {
-        // next_u64 is defined as `(hi << 32) | lo` where lo and hi come
-        // from two consecutive next_u32 calls. Verify the relationship.
-        let seed = nontrivial_seed();
-        let mut rng_a = ProofRng::from_seed(seed);
-        let mut rng_b = ProofRng::from_seed(seed);
-        let lo = rng_a.next_u32() as u64;
-        let hi = rng_a.next_u32() as u64;
-        let combined = (hi << 32) | lo;
-        let direct = rng_b.next_u64();
-        assert_eq!(combined, direct);
-    }
-
     // --- verify_shuffle (full happy path + 2 failure modes) ---
 
     fn shuffled_deck(seed: [u8; 32]) -> Deck {
         let mut deck = Deck::standard();
-        let mut rng = ProofRng::from_seed(seed);
+        let mut rng = RngSource::from_seed(&seed);
         deck.shuffle(&mut rng);
         deck
     }

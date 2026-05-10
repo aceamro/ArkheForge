@@ -16,6 +16,7 @@
 //! controls on top.
 
 #![allow(dead_code)]
+#![forbid(unsafe_code)]
 
 pub mod card;
 pub mod deck;

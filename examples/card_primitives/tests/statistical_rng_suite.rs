@@ -39,9 +39,8 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss, clippy::cast_lossless)]
 
+use arkhe_rand::RngSource;
 use card_primitives::deck::Deck;
-use card_primitives::shuffle_proof::ProofRng;
-use rand_core::RngCore;
 
 // ---------------------------------------------------------------------------
 // Sample sizes
@@ -88,13 +87,13 @@ fn derive_seed(label: &[u8], trial: u64) -> [u8; 32] {
     *h.finalize().as_bytes()
 }
 
-fn make_rng(label: &[u8], trial: u64) -> ProofRng {
-    ProofRng::from_seed(derive_seed(label, trial))
+fn make_rng(label: &[u8], trial: u64) -> RngSource {
+    RngSource::from_seed(&derive_seed(label, trial))
 }
 
 fn generate_byte_stream(label: &[u8]) -> Vec<u8> {
-    // A single canonical seed per bit-level test — the BLAKE3 PRF
-    // inside `ProofRng` then expands it to the full sample.
+    // A single canonical seed per bit-level test — the BLAKE3 KDF stream
+    // inside `RngSource` then expands it to the full sample.
     let mut rng = make_rng(label, 0);
     let mut buf = vec![0u8; BIT_SAMPLE_BYTES];
     rng.fill_bytes(&mut buf);
@@ -103,7 +102,7 @@ fn generate_byte_stream(label: &[u8]) -> Vec<u8> {
 
 fn shuffle_to_order(seed: [u8; 32]) -> [u8; 52] {
     let mut deck = Deck::standard();
-    let mut rng = ProofRng::from_seed(seed);
+    let mut rng = RngSource::from_seed(&seed);
     deck.shuffle(&mut rng);
     let mut order = [0u8; 52];
     for (i, c) in deck.cards().iter().enumerate() {

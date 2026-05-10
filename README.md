@@ -118,7 +118,7 @@ Single-direction DAG enforced by the `ImportDirectionMonotone` invariant
 
 ### Workspace
 
-Nine crates total — 8 workspace members + 1 standalone Kani harness:
+Ten crates total — 9 workspace members + 1 standalone Kani harness:
 
 | Crate                          | Layer       | Role                                       |
 | :---                           | :---        | :---                                       |
@@ -126,10 +126,11 @@ Nine crates total — 8 workspace members + 1 standalone Kani harness:
 | `arkhe-forge-core`             | L1          | Runtime traits, dispatch, observer pipeline|
 | `arkhe-forge-platform`         | L2          | Hook host v2, observer host v2, KMS, AEAD  |
 | `arkhe-forge-macros`           | L1          | Derive macros for forge components         |
+| `arkhe-rand`                   | L3          | BLAKE3-keyed PRNG (no_std), shell-side use |
 | `arkhe-runtime-testkit`        | dev         | proptest harness for runtime crates        |
 | `arkhe-trait-default-check`    | CI          | Sealed-trait safeguard lint                |
 | `arkhe-subset-rust-check`      | CI          | `Action::compute()` determinism subset lint|
-| `card-primitives`              | examples/   | Provably-fair Hold'em 9-stage demo (card / deck / hand_eval / shuffle_proof / forge_integration / main + Forge L2 `RuntimeService` dispatch + WAL export + streaming round-trip) + GLI-19 §3.2.5 RNG bias compliance (Lemire) + NIST SP 800-22 14-test + Forge L1 `ArkheAction`/`ArkheEvent` + Forge L2 `Kernel::submit`/`step` end-to-end reference integration |
+| `card-primitives`              | examples/   | Provably-fair Hold'em 9-stage demo (card / deck / hand_eval / shuffle_proof / forge_integration / main + Forge L2 `RuntimeService` dispatch + WAL export + streaming round-trip) + GLI-19 §3.2.5 RNG bias compliance (Lemire via `arkhe-rand`) + NIST SP 800-22 14-test + Forge L1 `ArkheAction`/`ArkheEvent` + Forge L2 `Kernel::submit`/`step` end-to-end reference integration |
 | `arkhe-runtime-proofs`         | proof       | Kani 5-property harness (standalone)       |
 
 ## Determinism guarantees

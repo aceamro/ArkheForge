@@ -9,11 +9,12 @@
 //!   `draw()` advances the cursor monotonically; `cursor == 52` means the
 //!   deck is exhausted (all subsequent `draw()` return `None`).
 //! - **Shuffle = Fisher-Yates / Knuth.** Operates only on the undrawn region
-//!   `cards[cursor..]`. Caller-supplied `RngCore`. The bounded-uniform
-//!   integer draw at each iteration uses Lemire's debiased multiply-shift
-//!   (see `unbiased_range_u32`) — modulo bias is mathematically zero
-//!   given a uniform underlying RNG, satisfying GLI-19 §3.2.5's 1e-9
-//!   bias bound by construction.
+//!   `cards[cursor..]`. Caller-supplied [`RngSource`] (BLAKE3-keyed PRNG
+//!   from the `arkhe-rand` crate). The bounded-uniform integer draw at
+//!   each iteration uses [`gen_range_inclusive`] (Lemire's debiased
+//!   multiply-shift, audited via the arkhe-rand frozen state) — modulo
+//!   bias is mathematically zero given a uniform underlying RNG,
+//!   satisfying GLI-19 §3.2.5's 1e-9 bias bound by construction.
 //! - **Draw = pop-from-end semantics.** `draw()` yields `cards[cursor]`
 //!   then increments cursor. Combined with shuffle (which permutes
 //!   `cards[cursor..]`), the deal is uniformly random over `52!`
@@ -36,7 +37,7 @@
 //! Educational scope. Band 3 axiom anchoring is deferred — the
 //! `examples/` tree is exempt from the workspace axiom-cite gate.
 
-use rand_core::RngCore;
+use arkhe_rand::{gen_range_inclusive, RngSource};
 
 use crate::card::{Card, Rank, Suit};
 
@@ -47,58 +48,6 @@ use crate::card::{Card, Rank, Suit};
 const _: () = {
     assert!(Rank::ALL.len() * Suit::ALL.len() == 52);
 };
-
-/// Uniform integer in `0..bound` via Lemire's debiased multiply-shift.
-///
-/// For `bound` values that don't divide `2³²` evenly, naive
-/// `next_u32() % bound` produces a biased distribution where the low
-/// outputs `0..(2³² mod bound)` are slightly more probable than the
-/// high outputs. Fisher-Yates calls this site with `bound ∈ {2, 3, ..., 52}`,
-/// and the worst-case naive modulo bias for `bound = 52` is
-/// `1 / 2³² ≈ 2.33e-10` per output — which compounds non-trivially
-/// across the 51 sequential draws of a single shuffle.
-///
-/// Lemire's method maps the 32-bit RNG output to a 64-bit space, uses
-/// the high 32 bits as the candidate, and uses the low 32 bits as a
-/// rejection signal. The expected number of RNG draws per call is
-/// `1 + bound / 2³² ≈ 1 + 1.21e-8` for `bound ≤ 52`, so the rejection
-/// loop terminates in ~one iteration with overwhelming probability.
-///
-/// Reference: D. Lemire, *"Fast Random Integer Generation in an
-/// Interval"*, ACM TOMACS 2019, §3 — <https://arxiv.org/abs/1805.10941>.
-///
-/// GLI-19 §3.2.5 1e-9 bias bound is satisfied by construction: with a
-/// uniform underlying RNG, the output distribution of this function is
-/// **mathematically uniform** (the rejection loop equates the output
-/// space to a multiple of `bound`). With BLAKE3 keyed-PRF as the
-/// underlying RNG (see `shuffle_proof::ProofRng`), the statistical
-/// distance from uniform is bounded by the BLAKE3 PRF security
-/// parameter (≈ 2⁻¹²⁸), well below the 1e-9 regulatory threshold.
-#[inline]
-fn unbiased_range_u32<R: RngCore>(rng: &mut R, bound: u32) -> u32 {
-    debug_assert!(bound > 0);
-    let mut x = rng.next_u32();
-    let mut m = (x as u64).wrapping_mul(bound as u64);
-    let mut l = m as u32;
-    if l < bound {
-        // `t = (2³² - bound) mod bound = (2³² mod bound)` — the smallest
-        // multiple of `bound` that fits in u32, expressed as a rejection
-        // threshold. `bound.wrapping_neg()` is `2³² - bound` in u32
-        // arithmetic.
-        let t = bound.wrapping_neg() % bound;
-        while l < t {
-            x = rng.next_u32();
-            m = (x as u64).wrapping_mul(bound as u64);
-            l = m as u32;
-        }
-    }
-    // `(m >> 32)` is the candidate, uniform on `0..bound` after the
-    // rejection loop. Suppress the unused-variable lint for `x`: it's
-    // the source of `m` and the rejection-loop body's only side effect
-    // is the `m`/`l` updates.
-    let _ = x;
-    (m >> 32) as u32
-}
 
 /// 52-card playing deck with cursor-based draw + Fisher-Yates shuffle.
 ///
@@ -135,13 +84,13 @@ impl Deck {
     /// preserved verbatim — re-shuffle of a partially dealt deck is
     /// well-defined (only the unseen tail is permuted).
     ///
-    /// Each inner-loop draw uses `unbiased_range_u32` (Lemire's
-    /// rejection-sampling) so the resulting permutation is
-    /// **mathematically uniform** over the symmetric group of the
-    /// undrawn region — GLI-19 §3.2.5 1e-9 bias bound is satisfied by
-    /// construction; no per-draw bias accumulates across the 51
-    /// sequential swaps of a fresh-deck shuffle.
-    pub fn shuffle<R: RngCore>(&mut self, rng: &mut R) {
+    /// Each inner-loop draw uses [`gen_range_inclusive`] (Lemire's
+    /// rejection-sampling, audited via the arkhe-rand frozen state) so
+    /// the resulting permutation is **mathematically uniform** over the
+    /// symmetric group of the undrawn region — GLI-19 §3.2.5 1e-9 bias
+    /// bound is satisfied by construction; no per-draw bias accumulates
+    /// across the 51 sequential swaps of a fresh-deck shuffle.
+    pub fn shuffle(&mut self, rng: &mut RngSource) {
         let start = self.cursor as usize;
         if start >= 52 {
             return;
@@ -152,12 +101,10 @@ impl Deck {
         }
         // Iterate i from len-1 down to 1 (inclusive). For each i, swap
         // cards[start + i] with cards[start + j] where j is uniform in
-        // 0..=i (so the random integer is drawn from `0..(i+1)`).
+        // 0..=i, sourced from the unbiased Lemire path inside arkhe-rand.
         let mut i = len - 1;
         while i >= 1 {
-            // j ∈ 0..=i — bounded-uniform via Lemire's debiased
-            // multiply-shift. Cast to u32 is sound because `i ≤ 51`.
-            let j = unbiased_range_u32(rng, (i + 1) as u32) as usize;
+            let j = gen_range_inclusive(rng, 0usize..=i);
             self.cards.swap(start + i, start + j);
             i -= 1;
         }
@@ -210,53 +157,11 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Deterministic LCG-style test RNG. Quality is sufficient for
-    /// shuffle determinism + cardinality preservation tests; the
-    /// production binary uses `shuffle_proof::ProofRng` (BLAKE3
-    /// keyed-PRF), and a future hardening cycle may swap that for a
-    /// system-RNG (`getrandom`) front-end.
-    ///
-    /// LCG constants from PCG-XSL-RR family: multiplier
-    /// `0x5851_F42D_4C95_7F2D` is the canonical PCG default.
-    struct TestCounterRng {
-        state: u64,
-    }
-
-    impl TestCounterRng {
-        const fn new(seed: u64) -> Self {
-            // Avoid the all-zeros fixed point: seed | 1 forces an odd
-            // initial state, ensuring the LCG produces a non-trivial
-            // sequence even from `TestCounterRng::new(0)`.
-            Self { state: seed | 1 }
-        }
-    }
-
-    impl RngCore for TestCounterRng {
-        fn next_u32(&mut self) -> u32 {
-            self.state = self
-                .state
-                .wrapping_mul(0x5851_F42D_4C95_7F2D)
-                .wrapping_add(0xA3B1_9535_4A39_B70D);
-            (self.state >> 32) as u32
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            ((self.next_u32() as u64) << 32) | (self.next_u32() as u64)
-        }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            for chunk in dest.chunks_mut(4) {
-                let bytes = self.next_u32().to_le_bytes();
-                for (i, slot) in chunk.iter_mut().enumerate() {
-                    *slot = bytes[i];
-                }
-            }
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-            self.fill_bytes(dest);
-            Ok(())
-        }
+    /// Build a 32-byte fixed seed from a single distinguishing byte —
+    /// just enough variety to give each shuffle test its own
+    /// permutation while staying deterministic and reproducible.
+    const fn fixed_seed(byte: u8) -> [u8; 32] {
+        [byte; 32]
     }
 
     fn collect_all(deck: &Deck) -> BTreeSet<Card> {
@@ -293,7 +198,7 @@ mod tests {
     #[test]
     fn deck_shuffle_preserves_cardinality_and_uniqueness() {
         let mut deck = Deck::standard();
-        let mut rng = TestCounterRng::new(0xDEAD_BEEF);
+        let mut rng = RngSource::from_seed(&fixed_seed(0xDE));
         deck.shuffle(&mut rng);
         let set = collect_all(&deck);
         assert_eq!(set.len(), 52, "shuffle must preserve cardinality");
@@ -304,8 +209,8 @@ mod tests {
     fn deck_shuffle_deterministic_same_rng_same_permutation() {
         let mut deck1 = Deck::standard();
         let mut deck2 = Deck::standard();
-        let mut rng1 = TestCounterRng::new(42);
-        let mut rng2 = TestCounterRng::new(42);
+        let mut rng1 = RngSource::from_seed(&fixed_seed(42));
+        let mut rng2 = RngSource::from_seed(&fixed_seed(42));
         deck1.shuffle(&mut rng1);
         deck2.shuffle(&mut rng2);
         assert_eq!(deck1, deck2, "identical RNG state ⇒ identical permutation");
@@ -315,7 +220,7 @@ mod tests {
     fn deck_shuffle_actually_shuffles() {
         let mut deck = Deck::standard();
         let canonical = Deck::standard();
-        let mut rng = TestCounterRng::new(0xCAFE_F00D);
+        let mut rng = RngSource::from_seed(&fixed_seed(0xCA));
         deck.shuffle(&mut rng);
         assert_ne!(
             deck, canonical,
@@ -327,8 +232,8 @@ mod tests {
     fn deck_shuffle_different_rng_different_permutation() {
         let mut deck1 = Deck::standard();
         let mut deck2 = Deck::standard();
-        let mut rng1 = TestCounterRng::new(1);
-        let mut rng2 = TestCounterRng::new(2);
+        let mut rng1 = RngSource::from_seed(&fixed_seed(1));
+        let mut rng2 = RngSource::from_seed(&fixed_seed(2));
         deck1.shuffle(&mut rng1);
         deck2.shuffle(&mut rng2);
         assert_ne!(
@@ -382,7 +287,7 @@ mod tests {
     fn deck_clone_independence() {
         let mut a = Deck::standard();
         let b = a.clone();
-        let mut rng = TestCounterRng::new(7);
+        let mut rng = RngSource::from_seed(&fixed_seed(7));
         a.shuffle(&mut rng);
         // b unaffected by a's shuffle
         assert_eq!(b, Deck::standard());
@@ -400,7 +305,7 @@ mod tests {
         let drawn_snapshot: Vec<Card> = deck.cards()[..deck.cursor()].to_vec();
         assert_eq!(drawn_snapshot, drawn);
         // Shuffle only permutes cards[cursor..52].
-        let mut rng = TestCounterRng::new(0xBAD0_CAFE);
+        let mut rng = RngSource::from_seed(&fixed_seed(0xBA));
         deck.shuffle(&mut rng);
         // Drawn region byte-identical post-shuffle.
         assert_eq!(&deck.cards()[..5], drawn.as_slice());
@@ -416,7 +321,7 @@ mod tests {
             let _ = deck.draw();
         }
         let snapshot = deck.clone();
-        let mut rng = TestCounterRng::new(0xFEED);
+        let mut rng = RngSource::from_seed(&fixed_seed(0xFE));
         deck.shuffle(&mut rng);
         assert_eq!(deck, snapshot, "shuffle on exhausted deck must be a no-op");
     }

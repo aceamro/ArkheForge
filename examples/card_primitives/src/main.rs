@@ -43,12 +43,13 @@ use arkhe_forge_platform::dispatcher::{wal_to_sink, RuntimeService};
 use arkhe_forge_platform::wal_export::{BufferedWalSink, StreamingWalReader, WalStreamReader};
 use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal, Tick};
 use arkhe_kernel::state::InstanceConfig;
+use arkhe_rand::RngSource;
 use card_primitives::card::Card;
 use card_primitives::deck::Deck;
 use card_primitives::forge_integration::{DeckOrderBytes, HandShowdownLanded, RecordHandShowdown};
 use card_primitives::hand_eval::{compare_hands, evaluate_7};
 use card_primitives::shuffle_proof::{
-    verify_shuffle, verify_shuffle_order, ProofRng, ShowdownReceipt, ShuffleCommitment,
+    verify_shuffle, verify_shuffle_order, ShowdownReceipt, ShuffleCommitment,
 };
 
 /// Render a 32-byte digest as lowercase hex via [`blake3::Hash`]'s
@@ -82,7 +83,7 @@ fn main() {
     // -----------------------------------------------------------------
     // 2. Dealer shuffles deterministically + deals
     // -----------------------------------------------------------------
-    let mut rng = ProofRng::from_seed(seed);
+    let mut rng = RngSource::from_seed(&seed);
     let mut deck = Deck::standard();
     deck.shuffle(&mut rng);
 
@@ -182,7 +183,7 @@ fn main() {
     // itself). For protocols that broadcast a pre-deal Deck snapshot,
     // Path B audits that snapshot directly.
     let mut replay = Deck::standard();
-    let mut replay_rng = ProofRng::from_seed(seed);
+    let mut replay_rng = RngSource::from_seed(&seed);
     replay.shuffle(&mut replay_rng);
     match verify_shuffle(&commitment, &seed, &replay) {
         Ok(()) => println!("      OK  verify_shuffle: pre-deal Deck reproducible"),

@@ -19,11 +19,12 @@ use arkhe_forge_platform::wal_export::{BufferedWalSink, StreamingWalReader, WalS
 use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal, Tick};
 use arkhe_kernel::state::InstanceConfig;
 
+use arkhe_rand::RngSource;
 use card_primitives::card::Rank;
 use card_primitives::deck::Deck;
 use card_primitives::forge_integration::{DeckOrderBytes, HandShowdownLanded, RecordHandShowdown};
 use card_primitives::hand_eval::HandRank;
-use card_primitives::shuffle_proof::{ProofRng, ShowdownReceipt, ShuffleCommitment};
+use card_primitives::shuffle_proof::{ShowdownReceipt, ShuffleCommitment};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,7 +45,7 @@ fn fixture_seed() -> [u8; 32] {
 /// order. Mirrors the helper used by the `shuffle_proof` test suite.
 fn shuffled_order(seed: [u8; 32]) -> [u8; 52] {
     let mut deck = Deck::standard();
-    let mut rng = ProofRng::from_seed(seed);
+    let mut rng = RngSource::from_seed(&seed);
     deck.shuffle(&mut rng);
     let mut order = [0u8; 52];
     for (i, c) in deck.cards().iter().enumerate() {
@@ -89,7 +90,7 @@ fn fixture_action() -> RecordHandShowdown {
 // Same `(action, ctx-fixture)` pair, two independent `process_action`
 // runs → drained `EventRecord.payload` must be byte-identical. This is
 // the consumer-side proof of the L0 A1 D1-Total replay-determinism
-// property: a ProofRng / blake3-keyed-PRF / Lemire-rejection-shuffle
+// property: a RngSource / blake3-KDF-PRNG / Lemire-rejection-shuffle
 // pipeline produces wire output that does not vary between runs.
 
 #[test]

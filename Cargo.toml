@@ -54,11 +54,6 @@ proptest           = "1.5"
 toml               = "0.8"
 zeroize            = { version = "1.8", features = ["derive"] }
 static_assertions  = "1.1"
-# `rand_core` 0.6 — RngCore trait surface for examples + future runtime
-# RNG abstractions. Pinned to 0.6 (not 0.9) for ed25519-dalek 2 transitive
-# dep alignment + workspace single-version policy. `default-features = false`
-# preserves no_std compatibility for downstream example/runtime extraction.
-rand_core          = { version = "0.6", default-features = false }
 # `getrandom` 0.2 — OS CSPRNG front-end. Pinned `default-features = false`
 # (no-std base) so `arkhe-rand` can opt-in via its `os-entropy` feature on
 # WASM / bare-metal targets without dragging in `std`. Consumers that

@@ -190,7 +190,7 @@ impl ActionCompute for RecordHandShowdown {
         }
         // Stage 2 — replay reproducibility check. Reuses the public
         // `verify_shuffle_order` API: rebuild a `Deck::standard`,
-        // shuffle with `ProofRng::from_seed(seed)`, compare the
+        // shuffle with `RngSource::from_seed(&seed)`, compare the
         // resulting 52-byte order to the receipt.
         let deck_order_arr = self.deck_order.as_array();
         verify_shuffle_order(&recomputed, &self.seed, &deck_order_arr)

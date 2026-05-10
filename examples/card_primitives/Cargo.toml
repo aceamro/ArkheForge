@@ -15,7 +15,14 @@ publish       = false
 serde             = { workspace = true }
 postcard          = { workspace = true }
 static_assertions = { workspace = true }
-rand_core         = { workspace = true }
+# `default-features = false` keeps card_primitives off the optional
+# `os-entropy` feature (and its `getrandom` transitive dep). The
+# Hold'em demo seeds RngSource deterministically from a hash; no OS
+# entropy callsite means no need to pull `getrandom` into the example.
+# Path dep matches the workspace pattern shared by `arkhe-forge` /
+# `arkhe-forge-platform` — arkhe-rand is a workspace member, not yet
+# published, so a path-based resolution is required.
+arkhe-rand        = { path = "../../arkhe-rand", version = "0.13", default-features = false }
 blake3            = { workspace = true }
 zeroize           = { workspace = true }
 
