@@ -26,7 +26,12 @@ arkhe-subset-rust-check   = { path = "../arkhe-subset-rust-check", version = "0.
 
 [dev-dependencies]
 trybuild          = "1.0"
-arkhe-forge-core  = { path = "../arkhe-forge-core", version = "0.13" }
+# Path-only (no `version = ...`) so `cargo publish` strips this entirely
+# from the published manifest. Required because `arkhe-forge-core` itself
+# has a real `[dependencies]` edge to `arkhe-forge-macros`, forming a
+# publish-order cycle that only path-only dev-deps can break — standard
+# Cargo workspace pattern.
+arkhe-forge-core  = { path = "../arkhe-forge-core" }
 serde             = { workspace = true }
 # `tests/pure_macro.rs` exercises `#[arkhe_pure]` on a pure body that
 # hashes via blake3 — proves the attribute does not reject deterministic

@@ -44,7 +44,12 @@ audit-receipt-key-identified = []
 
 [dev-dependencies]
 proptest             = { workspace = true }
-arkhe-runtime-testkit = { path = "../arkhe-runtime-testkit", version = "0.13" }
+# Path-only (no `version = ...`) so `cargo publish` strips this entirely
+# from the published manifest. Required because `arkhe-runtime-testkit`
+# has a real `[dependencies]` edge to `arkhe-forge-core`, forming a
+# publish-order cycle that only path-only dev-deps can break — standard
+# Cargo workspace pattern.
+arkhe-runtime-testkit = { path = "../arkhe-runtime-testkit" }
 
 [lints]
 workspace = true
