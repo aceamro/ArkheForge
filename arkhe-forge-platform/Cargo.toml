@@ -47,8 +47,17 @@ getrandom           = { workspace = true, features = ["std"] }
 # Tier-2 AWS KMS backend — opt-in via `tier-2-aws-kms`. The async-only
 # `aws-sdk-kms` is bridged to the sync `KmsBackend` trait through an
 # `AwsKmsBackend`-owned `tokio` current-thread runtime. `aws-config` provides the credential loader.
-aws-sdk-kms         = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
-aws-config          = { version = "1", default-features = false, features = ["rt-tokio", "rustls"], optional = true }
+#
+# `default-https-client` (aws-sdk-kms) and `client-hyper` (aws-config)
+# both route through `aws-smithy-runtime/default-https-client` →
+# `aws-smithy-http-client/rustls-aws-lc`, which uses the modern rustls
+# 0.23 + rustls-webpki 0.103+ chain. The legacy `rustls` feature on
+# these crates instead activates `aws-smithy-runtime/tls-rustls` →
+# `aws-smithy-http-client/legacy-rustls-ring`, which still pulls
+# rustls 0.21.12 + rustls-webpki 0.101.7 (RUSTSEC-2026-0098 +
+# RUSTSEC-2026-0099) — explicitly avoided here.
+aws-sdk-kms         = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"], optional = true }
+aws-config          = { version = "1", default-features = false, features = ["rt-tokio", "client-hyper"], optional = true }
 tokio               = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"], optional = true }
 
 # Tier-2 Hook host v2 + Observer host v2 — wasmtime preview-2 + WASI
