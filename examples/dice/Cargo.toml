@@ -1,0 +1,38 @@
+[package]
+name          = "dice-forge"
+version       = "0.13.0"
+edition       = "2021"
+rust-version.workspace = true
+description   = "Provably-fair 3D6 dice example — server commit + user-seed combined PRF + WAL persistence + multi-run history. Forge L1 + L2 framework integration."
+repository    = "https://github.com/aceamro/ArkheForge"
+homepage      = "https://github.com/aceamro/ArkheForge"
+license       = "MIT OR Apache-2.0"
+authors       = ["Arkhe Contributors"]
+publish       = false
+
+[dependencies]
+serde             = { workspace = true }
+postcard          = { workspace = true }
+blake3            = { workspace = true }
+zeroize           = { workspace = true }
+thiserror         = { workspace = true }
+# arkhe-rand consumed only as deterministic PRF (`RngSource::from_seed`);
+# entropy collection is via direct `getrandom` below — RngSource keeps
+# its seed-zeroize invariant private. Path dep matches workspace pattern.
+arkhe-rand        = { path = "../../arkhe-rand", version = "0.13", default-features = false }
+# Direct OS CSPRNG entry-point for the per-run server seed. The `std`
+# feature pulls in the std-backed sources (Linux getrandom syscall,
+# macOS Security.framework, Windows BCryptGenRandom, etc.); matches
+# the precedent set by `arkhe-forge-platform/Cargo.toml` for KMS work.
+getrandom         = { workspace = true, features = ["std"] }
+# ArkheForge L1+L2 — `RuntimeService::dispatch` runs Actions through the
+# kernel; `BufferedWalSink` + `wal_to_sink` stream the WAL to a portable
+# byte form on disk; `StreamingWalReader` reverses it on next launch.
+arkhe-forge-core      = { path = "../../arkhe-forge-core",     version = "0.13" }
+arkhe-forge-platform  = { path = "../../arkhe-forge-platform", version = "0.13" }
+# Kernel ABI types (`Tick`, `Principal`, `CapabilityMask`, `InstanceId`)
+# touched by the dispatch surface.
+arkhe-kernel      = { workspace = true }
+
+[lints]
+workspace = true

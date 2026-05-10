@@ -28,6 +28,7 @@ members = [
     # Educational examples — standalone workspace members. Pattern alignment
     # with `ArkheKernel/examples/dice/` (own Cargo.toml + src/main.rs).
     "examples/card_primitives",
+    "examples/dice",
 ]
 
 # arkhe-runtime-proofs is a standalone Kani harness crate (excluded from
