@@ -164,9 +164,13 @@ pub enum DekShredError {
     Backend(&'static str),
 }
 
-/// In-memory [`DekShredder`] — deterministic Ed25519-style placeholder
-/// attestation for tests and the Tier-0 harness. All paths emit
-/// `RuntimeSignatureClass::Ed25519` regardless of compliance tier.
+/// In-memory [`DekShredder`] — deterministic transparency-digest
+/// placeholder for tests and the Tier-0 harness. The payload is a BLAKE3
+/// keyed hash (a MAC / transparency digest), NOT a signature, so the
+/// attestation class is [`RuntimeSignatureClass::None`]: a verifier
+/// presented with this attestation correctly rejects it as "not a
+/// signature". Real ML-DSA-65 receipt signing is provided by
+/// [`SigningDekShredder`] under the `tier-2-pqc-receipts` feature.
 #[derive(Debug, Default)]
 pub struct InMemoryDekShredder {
     live: HashMap<DekId, ()>,
@@ -198,16 +202,27 @@ impl InMemoryDekShredder {
         let log_index = self.next_log_index;
         self.next_log_index = self.next_log_index.saturating_add(1);
         // Deterministic payload — domain-separated BLAKE3 keyed by
-        // `dek_id`. Production paths sign with an HSM-held key.
+        // `dek_id`. This is a MAC / transparency digest, NOT a signature,
+        // so the class is `None`. Production paths sign with an HSM-held
+        // or ML-DSA key (see `SigningDekShredder`).
         let key = blake3::derive_key("arkhe-forge-dek-shred-attestation", &dek_id.0);
         let mut h = blake3::Hasher::new_keyed(&key);
         h.update(&log_index.to_be_bytes());
         let digest = h.finalize();
         DekShredAttestation {
-            attestation_class: RuntimeSignatureClass::Ed25519,
+            attestation_class: RuntimeSignatureClass::None,
             attestation_bytes: Bytes::copy_from_slice(digest.as_bytes()),
             log_index: Some(log_index),
         }
+    }
+
+    /// Overwrite the cached attestation for `dek_id` (idempotency-cache
+    /// coherence). Used by [`SigningDekShredder`] to keep the cache in
+    /// sync after re-issuing a real ML-DSA-65 signature, so a replay
+    /// returns the signed attestation rather than the digest placeholder.
+    #[cfg(feature = "tier-2-pqc-receipts")]
+    pub(crate) fn set_cached_attestation(&mut self, dek_id: DekId, att: DekShredAttestation) {
+        self.shredded.insert(dek_id, att);
     }
 }
 
@@ -222,6 +237,66 @@ impl DekShredder for InMemoryDekShredder {
         let attestation = self.issue_attestation(dek_id);
         self.shredded.insert(dek_id, attestation.clone());
         Ok(attestation)
+    }
+}
+
+/// ML-DSA-65 signing [`DekShredder`] — wraps an [`InMemoryDekShredder`]
+/// and re-issues a real 3309-byte ML-DSA-65 signature over the canonical
+/// DEK-shred message (`tier-2-pqc-receipts`). The inner shredder drives
+/// the live→shredded transition, the monotonic `log_index`, and the
+/// idempotency cache; this wrapper replaces the placeholder digest with a
+/// genuine signature (class [`RuntimeSignatureClass::MlDsa65`]) and keeps
+/// the inner cache coherent so a replay returns the signed attestation.
+#[cfg(feature = "tier-2-pqc-receipts")]
+#[derive(Debug)]
+pub struct SigningDekShredder {
+    inner: InMemoryDekShredder,
+    signer: crate::verifier::ReceiptSigner,
+}
+
+#[cfg(feature = "tier-2-pqc-receipts")]
+impl SigningDekShredder {
+    /// Construct from an inner shredder and a receipt signer.
+    #[must_use]
+    pub fn new(inner: InMemoryDekShredder, signer: crate::verifier::ReceiptSigner) -> Self {
+        Self { inner, signer }
+    }
+
+    /// Register a DEK with the inner shredder.
+    pub fn register(&mut self, dek_id: DekId) {
+        self.inner.register(dek_id);
+    }
+
+    /// Borrow the signer's verifying-key bytes (1952 bytes) so a verifier
+    /// can check the emitted attestation under a policy-pinned class.
+    #[must_use]
+    pub fn public_key_bytes(&self) -> &[u8] {
+        self.signer.public_key_bytes()
+    }
+}
+
+#[cfg(feature = "tier-2-pqc-receipts")]
+impl DekShredder for SigningDekShredder {
+    fn shred(&mut self, dek_id: DekId) -> Result<DekShredAttestation, DekShredError> {
+        // Drive the live→shredded transition + log_index + idempotency via
+        // the inner shredder, then re-issue a real ML-DSA-65 signature.
+        let placeholder = self.inner.shred(dek_id)?;
+        let Some(log_index) = placeholder.log_index else {
+            // No transparency entry to anchor a signature against — pass
+            // the inner attestation through unchanged.
+            return Ok(placeholder);
+        };
+        let message = crate::verifier::dek_shred_message(&dek_id, log_index);
+        let sig = self.signer.sign(&message);
+        let signed = DekShredAttestation {
+            attestation_class: RuntimeSignatureClass::MlDsa65,
+            attestation_bytes: Bytes::from(sig),
+            log_index: Some(log_index),
+        };
+        // Keep the inner idempotency cache coherent: a replay must return
+        // the signed attestation, not the digest placeholder.
+        self.inner.set_cached_attestation(dek_id, signed.clone());
+        Ok(signed)
     }
 }
 
@@ -563,7 +638,7 @@ mod tests {
         assert_eq!(completions[0].completed_tick, Tick(100));
         assert_eq!(
             completions[0].attestation.attestation_class,
-            RuntimeSignatureClass::Ed25519
+            RuntimeSignatureClass::None
         );
     }
 
@@ -709,7 +784,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(
             first[0].attestation.attestation_class,
-            RuntimeSignatureClass::Ed25519
+            RuntimeSignatureClass::None
         );
         assert!(obs.pii_rows().is_tombstoned(user));
 
@@ -798,7 +873,7 @@ mod tests {
         let region = &completion.regions[0];
         assert!(matches!(region.scope, ProgressScope::Region(_)));
         assert_eq!(region.shred_tick, Tick(100));
-        assert_eq!(region.attestation_class, RuntimeSignatureClass::Ed25519);
+        assert_eq!(region.attestation_class, RuntimeSignatureClass::None);
 
         let events = ErasureCascadeObserver::per_region_events(completion, 1);
         assert_eq!(events.len(), 1);

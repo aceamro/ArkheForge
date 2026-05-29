@@ -282,8 +282,12 @@ impl KmsBackend for MockKmsBackend {
         h.update(kek_ref.as_str().as_bytes());
         h.update(&log_index.to_le_bytes());
         let payload: [u8; 32] = *h.finalize().as_bytes();
+        // The payload is a BLAKE3 transparency digest, NOT a signature, so
+        // the class is `None`: a verifier presented with these bytes
+        // correctly rejects them as "not a signature". Production setups
+        // layer a genuine ML-DSA-65 / HSM signature on top.
         let attestation = DekShredAttestation {
-            attestation_class: RuntimeSignatureClass::Ed25519,
+            attestation_class: RuntimeSignatureClass::None,
             attestation_bytes: Bytes::copy_from_slice(&payload),
             log_index: Some(log_index),
         };

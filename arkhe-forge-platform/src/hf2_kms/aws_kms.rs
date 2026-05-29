@@ -217,8 +217,9 @@ impl KmsBackend for AwsKmsBackend {
             // AWS returns deletion_date + key_id. We fold the KEK arn + deletion
             // date into a BLAKE3 attestation payload so downstream consumers
             // can cross-reference the destruction event without a live API
-            // round-trip. Production setups layer Ed25519 HSM signing on top
-            // via a separate attestation service.
+            // round-trip. This payload is a transparency digest, NOT a
+            // signature, so the class is `None`. Production setups layer a
+            // genuine HSM signature on top via a separate attestation service.
             let key_id = out.key_id.unwrap_or_default();
             let deletion_ts = out.deletion_date.map(|d| d.secs()).unwrap_or_default();
             let mut h = blake3::Hasher::new();
@@ -227,7 +228,7 @@ impl KmsBackend for AwsKmsBackend {
             h.update(&deletion_ts.to_le_bytes());
             let payload: [u8; 32] = *h.finalize().as_bytes();
             Ok(DekShredAttestation {
-                attestation_class: RuntimeSignatureClass::Ed25519,
+                attestation_class: RuntimeSignatureClass::None,
                 attestation_bytes: Bytes::copy_from_slice(&payload),
                 log_index: Some(deletion_ts as u64),
             })
