@@ -233,6 +233,8 @@ pub enum CardError {
     InvalidRank(u8),
     /// Suit index out of `0..=3`.
     InvalidSuit(u8),
+    /// Card string was not exactly 2 bytes — carries the actual length.
+    InvalidLength(usize),
 }
 
 impl fmt::Display for CardError {
@@ -243,6 +245,9 @@ impl fmt::Display for CardError {
             }
             CardError::InvalidSuit(v) => {
                 write!(f, "invalid suit index {v} (expected 0..=3)")
+            }
+            CardError::InvalidLength(n) => {
+                write!(f, "invalid card string length {n} (expected 2)")
             }
         }
     }
@@ -263,10 +268,7 @@ impl FromStr for Card {
     fn from_str(s: &str) -> Result<Self, CardError> {
         let bytes = s.as_bytes();
         if bytes.len() != 2 {
-            // Length fault projected onto the rank dimension (sentinel 0 —
-            // not a valid face value, so the caller sees a non-collision
-            // diagnostic).
-            return Err(CardError::InvalidRank(0));
+            return Err(CardError::InvalidLength(bytes.len()));
         }
         let rank = match bytes[0] {
             b'2' => Rank::Two,
@@ -428,16 +430,38 @@ mod tests {
 
     #[test]
     fn from_str_rejects_invalid() {
-        // Length faults
-        assert!("".parse::<Card>().is_err());
-        assert!("A".parse::<Card>().is_err());
-        assert!("ACE".parse::<Card>().is_err());
+        // Length faults — dedicated `InvalidLength` variant carrying the
+        // actual length, not the old `InvalidRank(0)` sentinel collision.
+        assert!(matches!(
+            "".parse::<Card>(),
+            Err(CardError::InvalidLength(0))
+        ));
+        assert!(matches!(
+            "A".parse::<Card>(),
+            Err(CardError::InvalidLength(1))
+        ));
+        assert!(matches!(
+            "ACE".parse::<Card>(),
+            Err(CardError::InvalidLength(3))
+        ));
         // Rank faults
-        assert!("XS".parse::<Card>().is_err());
-        assert!("1S".parse::<Card>().is_err());
+        assert!(matches!(
+            "XS".parse::<Card>(),
+            Err(CardError::InvalidRank(b'X'))
+        ));
+        assert!(matches!(
+            "1S".parse::<Card>(),
+            Err(CardError::InvalidRank(b'1'))
+        ));
         // Suit faults
-        assert!("AX".parse::<Card>().is_err());
-        assert!("A1".parse::<Card>().is_err());
+        assert!(matches!(
+            "AX".parse::<Card>(),
+            Err(CardError::InvalidSuit(b'X'))
+        ));
+        assert!(matches!(
+            "A1".parse::<Card>(),
+            Err(CardError::InvalidSuit(b'1'))
+        ));
     }
 
     #[test]

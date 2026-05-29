@@ -325,4 +325,22 @@ mod tests {
         deck.shuffle(&mut rng);
         assert_eq!(deck, snapshot, "shuffle on exhausted deck must be a no-op");
     }
+
+    #[test]
+    fn deck_shuffle_with_one_card_undrawn_is_noop() {
+        // 51 drawn ⇒ exactly one undrawn card ⇒ the `len < 2` early-return
+        // fires. Guards against a future refactor that starts the swap loop
+        // at j=0 and would silently disturb the single-card case.
+        let mut deck = Deck::standard();
+        for _ in 0..51 {
+            let _ = deck.draw();
+        }
+        let snapshot = deck.clone();
+        let mut rng = RngSource::from_seed(&fixed_seed(0xFD));
+        deck.shuffle(&mut rng);
+        assert_eq!(
+            deck, snapshot,
+            "shuffle with a single undrawn card must be a no-op"
+        );
+    }
 }

@@ -65,9 +65,9 @@ const DOMAIN_SHOWDOWN: &[u8] = b"arkhe-forge::shuffle_proof::v1::showdown::";
 ///
 /// Lifts the length invariant from convention to the type itself: any
 /// `DeckOrderBytes` value that exists has 52 bytes.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DeckOrderBytes {
-    inner: Vec<u8>,
+    inner: [u8; 52],
 }
 
 impl DeckOrderBytes {
@@ -75,9 +75,7 @@ impl DeckOrderBytes {
     /// parameter type makes the length invariant statically enforced.
     #[must_use]
     pub fn from_array(bytes: [u8; 52]) -> Self {
-        Self {
-            inner: bytes.to_vec(),
-        }
+        Self { inner: bytes }
     }
 
     /// Borrow the underlying 52-byte payload.
@@ -86,25 +84,20 @@ impl DeckOrderBytes {
         &self.inner
     }
 
-    /// Borrow the payload as a fixed-width array reference. Always
-    /// succeeds because `DeckOrderBytes` enforces `inner.len() == 52`
-    /// by construction; the conversion is checked here for total
-    /// safety (no panic, no `unwrap`).
+    /// Copy out the fixed 52-byte payload. Trivial now that the backing
+    /// is a fixed-size array — no length check, no panic-defense needed
+    /// (the type invariant is the array length itself).
     #[must_use]
     pub fn as_array(&self) -> [u8; 52] {
-        let mut arr = [0u8; 52];
-        // `inner.len() == 52` is the type invariant, but copy via
-        // saturating slice to keep the function panic-free under
-        // workspace lints.
-        let n = self.inner.len().min(52);
-        arr[..n].copy_from_slice(&self.inner[..n]);
-        arr
+        self.inner
     }
 }
 
 impl Serialize for DeckOrderBytes {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.inner.serialize(serializer)
+        // Wire-byte-identical to a `Vec<u8>` backing: postcard emits a
+        // length-prefix + the 52 bytes either way.
+        self.inner.as_slice().serialize(serializer)
     }
 }
 
@@ -117,7 +110,10 @@ impl<'de> Deserialize<'de> for DeckOrderBytes {
                 inner.len()
             )));
         }
-        Ok(Self { inner })
+        let arr: [u8; 52] = inner
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("DeckOrderBytes try_into failed"))?;
+        Ok(Self { inner: arr })
     }
 }
 

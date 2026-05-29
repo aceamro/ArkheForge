@@ -170,11 +170,8 @@ pub fn verify_shuffle(
     revealed_seed: &[u8; 32],
     expected_deck: &Deck,
 ) -> Result<(), ProofError> {
-    // Stage 1 — commitment binding: recompute and compare.
-    let recomputed = ShuffleCommitment::from_seed(revealed_seed);
-    if recomputed != *commitment {
-        return Err(ProofError::CommitmentMismatch);
-    }
+    // Stage 1 — commitment binding (shared helper).
+    verify_commitment(commitment, revealed_seed)?;
     // Stage 2 — replay reproducibility: deal the deck from scratch
     // using the revealed seed and verify the order matches verbatim.
     let mut rng = RngSource::from_seed(revealed_seed);
@@ -206,11 +203,8 @@ pub fn verify_shuffle_order(
     revealed_seed: &[u8; 32],
     expected_order: &[u8; 52],
 ) -> Result<(), ProofError> {
-    // Stage 1 — commitment binding: recompute and compare.
-    let recomputed = ShuffleCommitment::from_seed(revealed_seed);
-    if recomputed != *commitment {
-        return Err(ProofError::CommitmentMismatch);
-    }
+    // Stage 1 — commitment binding (shared helper).
+    verify_commitment(commitment, revealed_seed)?;
     // Stage 2 — replay reproducibility: deal the deck from scratch and
     // compare the canonical byte order. Cursor state is irrelevant.
     let mut rng = RngSource::from_seed(revealed_seed);
@@ -222,6 +216,19 @@ pub fn verify_shuffle_order(
     }
     if replay_order != *expected_order {
         return Err(ProofError::DeckMismatch);
+    }
+    Ok(())
+}
+
+/// Stage-1 commitment binding shared by [`verify_shuffle`] and
+/// [`verify_shuffle_order`]: recompute the commitment from the revealed
+/// seed and reject if it does not match the broadcast commitment.
+fn verify_commitment(
+    commitment: &ShuffleCommitment,
+    revealed_seed: &[u8; 32],
+) -> Result<(), ProofError> {
+    if ShuffleCommitment::from_seed(revealed_seed) != *commitment {
+        return Err(ProofError::CommitmentMismatch);
     }
     Ok(())
 }
