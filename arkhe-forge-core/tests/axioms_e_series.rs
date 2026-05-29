@@ -27,8 +27,7 @@ use arkhe_forge_core::pipeline::process_action;
 use arkhe_forge_core::space::MAX_SPACE_DEPTH;
 use arkhe_forge_core::typecode;
 use arkhe_forge_core::user::{
-    AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser, UserId,
-    UserProfile,
+    AuthCredential, AuthKind, GdprEraseUser, KdfKind, KdfParams, RegisterUser, UserId, UserProfile,
 };
 use arkhe_kernel::abi::{CapabilityMask, EntityId, InstanceId, Principal, Tick, TypeCode};
 use bytes::Bytes;
@@ -316,7 +315,6 @@ fn _trait_paths_imported_anchor() {
             schema_version: 1,
             created_tick: Tick(0),
             primary_auth_kind: AuthKind::Passkey,
-            gdpr_status: GdprStatus::Active,
         },
         credential: valid_credential(),
     };

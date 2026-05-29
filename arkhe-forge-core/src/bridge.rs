@@ -48,7 +48,7 @@
 //!    `ActionContext` with no bound `InstanceView` (the kernel exposes
 //!    no per-entity read into compute), so
 //!    [`ActionContext::ensure_actor_eligible`] cannot resolve the
-//!    actor's `UserBinding` / `UserProfile` and returns `Ok` (soft
+//!    actor's `UserBinding` / `UserGdprState` and returns `Ok` (soft
 //!    pass). This is NOT a hole: the E-user-3 C3 gate is enforced at
 //!    the L2 boundary by the `RuntimeService::dispatch` admission gate
 //!    (forge-platform), which runs the same `ensure_actor_eligible`
@@ -159,7 +159,7 @@ mod tests {
     use crate::event::UserErasureScheduled;
     use crate::user::{
         AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser,
-        UserId, UserProfile,
+        UserGdprState, UserId, UserProfile,
     };
 
     fn fixture_args() -> (InstanceId, Tick) {
@@ -169,13 +169,35 @@ mod tests {
     #[test]
     fn ok_compute_returns_drained_ops() {
         let (iid, tick) = fixture_args();
+        let target = EntityId::new(42).unwrap();
         let action = GdprEraseUser {
             schema_version: 1,
-            user: UserId::new(EntityId::new(42).unwrap()),
+            user: UserId::new(target),
         };
         let ops = kernel_compute_inner(&action, iid, tick, None);
-        assert_eq!(ops.len(), 1, "GdprEraseUser emits one event Op");
+        assert_eq!(
+            ops.len(),
+            2,
+            "GdprEraseUser writes UserGdprState then emits the schedule event",
+        );
+        // op 0 — blind ErasurePending write on the user entity; this is what
+        // makes the L2 admission gate live (no read needed -> viewless-safe).
         match &ops[0] {
+            Op::SetComponent {
+                entity,
+                type_code,
+                bytes,
+                ..
+            } => {
+                assert_eq!(*entity, target);
+                assert_eq!(*type_code, TypeCode(UserGdprState::TYPE_CODE));
+                let state: UserGdprState = postcard::from_bytes(bytes).unwrap();
+                assert_eq!(state.status, GdprStatus::ErasurePending);
+            }
+            other => panic!("expected SetComponent(UserGdprState), got {:?}", other),
+        }
+        // op 1 — the cascade lease event.
+        match &ops[1] {
             Op::EmitEvent {
                 actor,
                 event_type_code,
@@ -201,7 +223,6 @@ mod tests {
                 schema_version: 1,
                 created_tick: Tick(0),
                 primary_auth_kind: AuthKind::Passkey,
-                gdpr_status: GdprStatus::Active,
             },
             credential: AuthCredential {
                 schema_version: 1,

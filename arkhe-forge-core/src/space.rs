@@ -194,8 +194,8 @@ impl ActionCompute for CreateSpace {
         ))?;
 
         // E-user-3 C3 MC — refuse Action when the creator's backing user is
-        // already in `GdprStatus::ErasurePending`. The cascade owns the only
-        // legal write path until completion.
+        // already in `GdprStatus::ErasurePending`. `GdprEraseUser` owns the
+        // write that sets that pointer (its own `UserGdprState` component).
         ctx.ensure_actor_eligible(creator, ctx.tick())?;
 
         // E-space-4 MC — parent chain depth check. A parent reference that

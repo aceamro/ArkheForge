@@ -81,8 +81,8 @@ mod tests {
 
     use crate::event::ArkheEvent as _;
     use crate::user::{
-        AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser,
-        UserId, UserProfile,
+        AuthCredential, AuthKind, GdprEraseUser, KdfKind, KdfParams, RegisterUser, UserId,
+        UserProfile,
     };
 
     fn ctx(caps: CapabilityMask) -> ActionContext<'static> {
@@ -130,7 +130,6 @@ mod tests {
                 schema_version: 1,
                 created_tick: Tick(0),
                 primary_auth_kind: AuthKind::Passkey,
-                gdpr_status: GdprStatus::Active,
             },
             credential: AuthCredential {
                 schema_version: 1,

@@ -413,8 +413,8 @@ impl ActionCompute for SubmitActivity {
         ))?;
 
         // E-user-3 C3 MC — refuse if the actor's backing user is in
-        // `GdprStatus::ErasurePending`. Cascade owns the only legal write
-        // path until completion (C3 contract).
+        // `GdprStatus::ErasurePending`. `GdprEraseUser` owns the write that
+        // sets that pointer (its own `UserGdprState` component).
         ctx.ensure_actor_eligible(actor, ctx.tick())?;
 
         if let Some(key) = self.idempotency_key {

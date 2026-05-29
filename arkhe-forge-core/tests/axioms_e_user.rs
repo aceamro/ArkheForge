@@ -19,8 +19,8 @@ use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::event::{ArkheEvent, UserErasureScheduled};
 use arkhe_forge_core::space::{CreateSpace, SpaceConfigDraft, SpaceKind, Visibility};
 use arkhe_forge_core::user::{
-    AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser, UserId,
-    UserProfile,
+    AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser,
+    UserGdprState, UserId, UserProfile,
 };
 use arkhe_kernel::abi::{CapabilityMask, EntityId, InstanceId, Principal, Tick};
 
@@ -83,7 +83,6 @@ fn e_user_2_register_rejects_weak_kdf() {
             schema_version: 1,
             created_tick: Tick(0),
             primary_auth_kind: AuthKind::Passkey,
-            gdpr_status: GdprStatus::Active,
         },
         credential: AuthCredential {
             schema_version: 1,
@@ -117,6 +116,14 @@ fn e_user_3_gdpr_erase_emits_lease_event() {
     };
     let mut c = ctx();
     act.compute(&mut c).unwrap();
+    // GdprEraseUser writes the `ErasurePending` lifecycle pointer (a blind,
+    // viewless-safe `UserGdprState` write) — this is what makes the admission
+    // gate live. Observable here through the staged Op buffer.
+    let staged = c
+        .staged_read::<UserGdprState>(eid(42))
+        .unwrap()
+        .expect("GdprEraseUser stages a UserGdprState write");
+    assert_eq!(staged.status, GdprStatus::ErasurePending);
     let events = c.drain_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].type_code, UserErasureScheduled::TYPE_CODE);
@@ -134,12 +141,12 @@ fn e_user_4_user_id_non_zero_at_the_type_level() {
 }
 
 /// **E-user-3 C3 (compute-MC)** — actor-originated compute paths reject when
-/// the actor's backing user is in `GdprStatus::ErasurePending`. The cascade
-/// owns the only legal write path until completion (E-user-3 cascade,
-/// NC2 contract). The test stages a `UserBinding` + `UserProfile { gdpr_status:
-/// ErasurePending }` directly into the context's Op buffer (visible through
-/// `staged_read`), then drives `CreateSpace::compute` and asserts the
-/// gate fires before any Space-bound Op is pushed.
+/// the actor's backing user is in `GdprStatus::ErasurePending`. `GdprEraseUser`
+/// owns the write that sets that pointer (E-user-3 cascade, NC2 contract). The
+/// test stages a `UserBinding` + `UserGdprState { status: ErasurePending }`
+/// directly into the context's Op buffer (visible through `staged_read`), then
+/// drives `CreateSpace::compute` and asserts the gate fires before any
+/// Space-bound Op is pushed.
 #[test]
 fn e_user_3_c3_erasing_actor_compute_rejects() {
     let user = UserId::new(eid(7));
@@ -147,7 +154,7 @@ fn e_user_3_c3_erasing_actor_compute_rejects() {
 
     let mut c = ctx();
 
-    // Stage `UserBinding` for the actor entity and `UserProfile` for the
+    // Stage `UserBinding` for the actor entity and `UserGdprState` for the
     // backing user. `staged_read` (used by `ensure_actor_eligible`) walks
     // the Op buffer in reverse, so the most recent SetComponent wins —
     // no `InstanceView` mock is needed.
@@ -161,14 +168,12 @@ fn e_user_3_c3_erasing_actor_compute_rejects() {
     .expect("stage UserBinding");
     c.set_component(
         user.get(),
-        &UserProfile {
+        &UserGdprState {
             schema_version: 1,
-            created_tick: Tick(50),
-            primary_auth_kind: AuthKind::Passkey,
-            gdpr_status: GdprStatus::ErasurePending,
+            status: GdprStatus::ErasurePending,
         },
     )
-    .expect("stage UserProfile");
+    .expect("stage UserGdprState");
 
     // Inject the actor whose backing user is ErasurePending — the erasure
     // gate runs on the injected acting actor (single source of truth).
@@ -212,5 +217,55 @@ fn e_user_3_c3_erasing_actor_compute_rejects() {
         c.ops().len(),
         staged_ops,
         "compute must not push any Space Ops after the GDPR gate fires"
+    );
+}
+
+/// **E-user-3 C3 (compute-MC, terminal)** — the gate blocks the terminal
+/// `Erased` state too, not only `ErasurePending`: a user whose crypto-erasure
+/// has COMPLETED must not originate actions. The eligibility gate fails closed
+/// on any non-`Active` lifecycle state.
+#[test]
+fn e_user_3_c3_erased_actor_compute_rejects() {
+    let user = UserId::new(eid(7));
+    let actor = ActorId::new(eid(8));
+
+    let mut c = ctx();
+    c.set_component(
+        actor.get(),
+        &UserBinding {
+            schema_version: 1,
+            user_id: user,
+        },
+    )
+    .expect("stage UserBinding");
+    c.set_component(
+        user.get(),
+        &UserGdprState {
+            schema_version: 1,
+            status: GdprStatus::Erased,
+        },
+    )
+    .expect("stage UserGdprState");
+
+    let mut c = c.with_actor(Some(actor));
+
+    let action = CreateSpace {
+        schema_version: 1,
+        config: SpaceConfigDraft {
+            schema_version: 1,
+            shell_id: ShellId([0xC3; 16]),
+            slug: BoundedString::<32>::new("forbidden").unwrap(),
+            kind: SpaceKind::Flat,
+            visibility: Visibility::Public,
+            parent_space: None,
+            created_tick: Tick(100),
+        },
+    };
+    let err = action
+        .compute(&mut c)
+        .expect_err("erased user must be rejected");
+    assert!(
+        matches!(err, ActionError::UserErasurePending { user: u, .. } if u == user),
+        "erased user must be blocked by the eligibility gate, got {err:?}",
     );
 }

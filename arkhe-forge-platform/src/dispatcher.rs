@@ -74,7 +74,7 @@ pub enum DispatchError {
     },
 
     /// The admission-gate probe read corrupt view bytes while resolving the
-    /// actor's `UserBinding` / `UserProfile`. Fail closed rather than admit.
+    /// actor's `UserBinding` / `UserGdprState`. Fail closed rather than admit.
     #[error("GDPR admission probe failed: corrupt view state")]
     ProbeViewCorrupt,
 }
@@ -157,20 +157,19 @@ impl RuntimeService {
     /// The kernel `compute` path drives a forge action through a viewless
     /// [`ActionContext`] (see [`arkhe_forge_core::bridge`]), so the
     /// in-compute `ensure_actor_eligible` check soft-passes — it cannot
-    /// read the actor's `UserBinding` / `UserProfile` without a bound
+    /// read the actor's `UserBinding` / `UserGdprState` without a bound
     /// view. This method closes that gap at the L2 boundary: when
     /// `authenticated_actor` is `Some`, the service binds a fresh
     /// `InstanceView`, runs the existing `ensure_actor_eligible` logic on
     /// that injected actor, and REJECTS the action before `submit` if the
     /// backing user is `ErasurePending`. The gate is SOUND — the actor it
     /// gates on is the authenticated caller, the same single source of truth
-    /// the compute records. Its LIVENESS, however, depends on a production
-    /// path transitioning the profile to `ErasurePending`; today none does —
-    /// the L2 erasure cascade has no write channel into the kernel-stored
-    /// `UserProfile` — so the gate is sound-but-inert in production (a
-    /// tracked limitation). When the status IS set, the action is rejected
-    /// before `submit` (never reaches the WAL), as this method's tests
-    /// demonstrate.
+    /// the compute records. It is also LIVE:
+    /// [`GdprEraseUser`](arkhe_forge_core::user::GdprEraseUser) transitions
+    /// the user's `UserGdprState` to `ErasurePending` with a blind write
+    /// (valid on the viewless compute path), so once erasure is requested
+    /// this gate rejects the user's subsequent actions before `submit` (never
+    /// reaches the WAL), as this method's tests demonstrate.
     ///
     /// # Errors
     ///
@@ -474,7 +473,7 @@ mod tests {
     /// End-to-end proof of the #2 L2 GDPR admission gate.
     ///
     /// A test-only seeding action writes a `UserBinding` (actor → user) plus a
-    /// `UserProfile { gdpr_status }` into a live kernel instance so the
+    /// `UserGdprState { status }` into a live kernel instance so the
     /// `InstanceView` the gate reads is populated. A real forge `CreateSpace`
     /// for an `ErasurePending` user is then REJECTED at dispatch (no WAL
     /// record), while the same action for an `Active` user proceeds and
@@ -487,14 +486,14 @@ mod tests {
         use arkhe_forge_core::brand::ShellId;
         use arkhe_forge_core::component::{ArkheComponent, BoundedString};
         use arkhe_forge_core::space::{CreateSpace, SpaceConfigDraft, SpaceKind, Visibility};
-        use arkhe_forge_core::user::{AuthKind, GdprStatus, UserId, UserProfile};
+        use arkhe_forge_core::user::{GdprStatus, UserGdprState, UserId};
         use arkhe_kernel::abi::{EntityId, TypeCode};
         use arkhe_kernel::state::{ActionCompute, ActionContext, Op};
         use arkhe_kernel::ArkheAction;
         use serde::{Deserialize, Serialize};
 
         // Test-only kernel action: stage `UserBinding` on the actor entity and
-        // `UserProfile` on the user entity so the gate's `InstanceView` reads
+        // `UserGdprState` on the user entity so the gate's `InstanceView` reads
         // are populated. Carries the desired GDPR status as a wire byte.
         #[derive(Serialize, Deserialize, ArkheAction)]
         #[arkhe(type_code = 0x0001_5105, schema_version = 1)]
@@ -510,18 +509,16 @@ mod tests {
                     schema_version: 1,
                     user_id: UserId::new(EntityId::new(self.user).unwrap()),
                 };
-                let profile = UserProfile {
+                let state = UserGdprState {
                     schema_version: 1,
-                    created_tick: Tick(0),
-                    primary_auth_kind: AuthKind::Passkey,
-                    gdpr_status: if self.erasing {
+                    status: if self.erasing {
                         GdprStatus::ErasurePending
                     } else {
                         GdprStatus::Active
                     },
                 };
                 let bb = postcard::to_allocvec(&binding).unwrap();
-                let pb = postcard::to_allocvec(&profile).unwrap();
+                let sb = postcard::to_allocvec(&state).unwrap();
                 vec![
                     Op::SetComponent {
                         entity: EntityId::new(self.actor).unwrap(),
@@ -531,9 +528,9 @@ mod tests {
                     },
                     Op::SetComponent {
                         entity: EntityId::new(self.user).unwrap(),
-                        type_code: TypeCode(UserProfile::TYPE_CODE),
-                        size: pb.len() as u64,
-                        bytes: bytes::Bytes::from(pb),
+                        type_code: TypeCode(UserGdprState::TYPE_CODE),
+                        size: sb.len() as u64,
+                        bytes: bytes::Bytes::from(sb),
                     },
                 ]
             }

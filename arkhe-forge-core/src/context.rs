@@ -45,7 +45,7 @@ use crate::actor::{ActorId, UserBinding};
 use crate::brand::ShellId;
 use crate::component::{ArkheComponent, BoundedString};
 use crate::derive_entity_id;
-use crate::user::{GdprStatus, UserId, UserProfile};
+use crate::user::{GdprStatus, UserGdprState, UserId};
 
 /// L2-provided dedup backend — resolves idempotency keys to prior
 /// `(EntityId, Tick)` assignments.
@@ -120,8 +120,9 @@ pub enum ActionError {
     #[error("invalid input: {0}")]
     InvalidInput(&'static str),
 
-    /// E-user-3 C3 — actor's backing user is in `GdprStatus::ErasurePending`,
-    /// so any actor-originated Action is blocked until the cascade finalises.
+    /// E-user-3 C3 — actor's backing user is in an erasure-lifecycle state
+    /// (`GdprStatus::ErasurePending` or the terminal `Erased`), so any
+    /// actor-originated Action is blocked.
     #[error("user erasure pending: {user:?} scheduled at {scheduled_tick:?}")]
     UserErasurePending {
         /// Backing user whose erasure is in flight.
@@ -535,16 +536,18 @@ impl<'i> ActionContext<'i> {
     }
 
     /// Resolve the GDPR status of `user` via the staged-aware
-    /// [`UserProfile`] read. Returns `Ok(None)` when no profile is
-    /// reachable; the compute caller decides whether that is a soft
-    /// pass (Tier-0 / pre-Bootstrap dev) or a hard reject.
+    /// [`UserGdprState`] read. Returns `Ok(None)` when no lifecycle pointer
+    /// is reachable; the compute caller decides whether that is a soft pass
+    /// (Tier-0 / pre-Bootstrap dev, or a user registered before the pointer
+    /// existed — treated as `Active`) or a hard reject.
     pub fn user_gdpr_status(&self, user: UserId) -> Result<Option<GdprStatus>, ActionError> {
-        let profile = self.staged_read::<UserProfile>(user.get())?;
-        Ok(profile.map(|p| p.gdpr_status))
+        let state = self.staged_read::<UserGdprState>(user.get())?;
+        Ok(state.map(|s| s.status))
     }
 
     /// E-user-3 C3 helper — fail an actor-originated compute when the
-    /// actor's backing user is in `GdprStatus::ErasurePending`. `Ok(None)`
+    /// actor's backing user is in an erasure-lifecycle state
+    /// (`GdprStatus::ErasurePending` or the terminal `Erased`). `Ok(None)`
     /// from the underlying reads (no view bound, anonymous actor, etc.)
     /// is treated as a soft pass.
     ///
@@ -565,9 +568,11 @@ impl<'i> ActionContext<'i> {
     ///   check on that injected actor BEFORE `submit`, rejecting an
     ///   erasure-pending action before it reaches the WAL. The actor this
     ///   gate evaluates is therefore the authenticated caller, never a
-    ///   trusted-by-default wire field — the gate is sound. It is live for
-    ///   any user whose `UserProfile` a production path has transitioned to
-    ///   `ErasurePending`.
+    ///   trusted-by-default wire field — the gate is sound. It is also live:
+    ///   [`GdprEraseUser`](crate::user::GdprEraseUser) transitions the user's
+    ///   [`UserGdprState`] to `ErasurePending` (a blind write, valid on the
+    ///   viewless path), so from the instant erasure is requested this gate
+    ///   rejects the user's subsequent actor-originated actions.
     pub fn ensure_actor_eligible(
         &self,
         actor: ActorId,
@@ -576,16 +581,22 @@ impl<'i> ActionContext<'i> {
         let Some(user) = self.authenticated_actor_user(actor)? else {
             return Ok(());
         };
-        if matches!(
-            self.user_gdpr_status(user)?,
-            Some(GdprStatus::ErasurePending)
-        ) {
-            return Err(ActionError::UserErasurePending {
-                user,
-                scheduled_tick,
-            });
+        // Only an `Active` user (or one with no lifecycle pointer yet — see
+        // `user_gdpr_status`) may act. Any erasure-lifecycle state blocks:
+        // `ErasurePending` (erasure requested) AND the terminal `Erased`
+        // (crypto-erasure completed) — a user whose data is being or has been
+        // shredded must not originate further actions. Fail closed; a future
+        // `GdprStatus` variant forces an explicit decision here at compile
+        // time rather than silently soft-passing.
+        match self.user_gdpr_status(user)? {
+            None | Some(GdprStatus::Active) => Ok(()),
+            Some(GdprStatus::ErasurePending | GdprStatus::Erased) => {
+                Err(ActionError::UserErasurePending {
+                    user,
+                    scheduled_tick,
+                })
+            }
         }
-        Ok(())
     }
 
     /// Preview the `EntityId` that the next [`ActionContext::next_id`] /
@@ -733,13 +744,12 @@ mod tests {
 
     #[test]
     fn set_component_encodes_via_postcard_and_tracks_size() {
-        use crate::user::{AuthKind, GdprStatus, UserProfile};
+        use crate::user::{AuthKind, UserProfile};
         let mut ctx = fixture_ctx();
         let profile = UserProfile {
             schema_version: 1,
             created_tick: Tick(1),
             primary_auth_kind: AuthKind::Passkey,
-            gdpr_status: GdprStatus::Active,
         };
         let entity = ctx.spawn_entity_for::<UserProfile>().unwrap();
         ctx.set_component(entity, &profile).unwrap();

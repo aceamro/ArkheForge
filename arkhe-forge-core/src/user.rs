@@ -1,6 +1,7 @@
 //! User primitive — Identity Subject.
 //!
-//! Runtime-global identity carrier. `UserProfile` tracks GDPR lifecycle; one
+//! Runtime-global identity carrier. `UserProfile` holds the registration
+//! facts; `UserGdprState` tracks the GDPR lifecycle pointer; one
 //! or more `AuthCredential`s attach Argon2id / Scrypt KDF secrets. The User
 //! is intentionally shell-agnostic — legal / billing / GDPR obligations cross
 //! shell boundaries.
@@ -56,7 +57,8 @@ pub enum AuthKind {
     Address = 3,
 }
 
-/// GDPR lifecycle state. Transition to `ErasurePending` blocks all
+/// GDPR lifecycle state. Any non-`Active` state — `ErasurePending` (erasure
+/// requested) or the terminal `Erased` (crypto-erasure completed) — blocks all
 /// actor-originated Actions on the user (compute MC gate, contract #5).
 #[non_exhaustive]
 #[repr(u8)]
@@ -93,6 +95,12 @@ pub struct KdfParams {
 }
 
 /// User profile Component — exactly one per User entity (invariant E-user-1).
+///
+/// The GDPR lifecycle pointer lives in its own [`UserGdprState`] component,
+/// NOT here: a lifecycle transition must be writable on the viewless
+/// dispatch-path compute (which cannot read existing state to do a
+/// read-modify-write), so the pointer is split out to keep `UserProfile`'s
+/// immutable-after-registration fields untouched by erasure transitions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheComponent)]
 #[arkhe(type_code = 0x0003_0001, schema_version = 1)]
 pub struct UserProfile {
@@ -102,8 +110,27 @@ pub struct UserProfile {
     pub created_tick: Tick,
     /// Auth family of the initial `AuthCredential`.
     pub primary_auth_kind: AuthKind,
+}
+
+/// GDPR lifecycle pointer — its own single-field Component (exactly one per
+/// User) and the sole source of truth for erasure eligibility.
+///
+/// Split out of [`UserProfile`] so a lifecycle transition is a blind, TOTAL
+/// `set_component` write: the viewless dispatch-path compute (see
+/// [`crate::bridge`]) cannot read existing kernel state, so it cannot
+/// read-modify-write a bundled struct without clobbering its other fields.
+/// A standalone single-field component makes the transition a correct total
+/// write with no read. The admission gate
+/// ([`ActionContext::ensure_actor_eligible`](crate::context::ActionContext::ensure_actor_eligible))
+/// reads THIS component; absence is treated as `Active` (a freshly registered
+/// user always carries one — `RegisterUser` seeds `Active`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ArkheComponent)]
+#[arkhe(type_code = 0x0003_0003, schema_version = 1)]
+pub struct UserGdprState {
+    /// Wire-level schema version tag (A15 succession).
+    pub schema_version: u16,
     /// GDPR lifecycle pointer.
-    pub gdpr_status: GdprStatus,
+    pub status: GdprStatus,
 }
 
 /// Stored authentication credential — at least one per User (invariant
@@ -199,6 +226,16 @@ impl ActionCompute for RegisterUser {
         let user_entity = ctx.spawn_entity_for::<UserProfile>()?;
         ctx.set_component(user_entity, &self.profile)?;
         ctx.set_component(user_entity, &self.credential)?;
+        // A freshly registered user is Active. The lifecycle pointer is its
+        // own component (see `UserGdprState`) so later erasure transitions
+        // need no read-modify-write of `UserProfile`.
+        ctx.set_component(
+            user_entity,
+            &UserGdprState {
+                schema_version: 1,
+                status: GdprStatus::Active,
+            },
+        )?;
         Ok(())
     }
 }
@@ -206,6 +243,22 @@ impl ActionCompute for RegisterUser {
 impl ActionCompute for GdprEraseUser {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Transition the GDPR lifecycle pointer to `ErasurePending` with a
+        // blind, total write of the standalone `UserGdprState` component — no
+        // read required, so this works on the viewless dispatch path. This is
+        // what makes the E-user-3 C3 admission gate LIVE: from the instant
+        // erasure is requested, the gate (which reads `UserGdprState`) rejects
+        // any further actor-originated action by this user. The cascade
+        // observer still drives the actual DEK shred / PII tombstone off the
+        // event below; the terminal `Erased` transition is a symmetric blind
+        // write the integrator drives once the cascade reports completion.
+        ctx.set_component(
+            self.user.get(),
+            &UserGdprState {
+                schema_version: 1,
+                status: GdprStatus::ErasurePending,
+            },
+        )?;
         let event = UserErasureScheduled {
             schema_version: 1,
             user: self.user,

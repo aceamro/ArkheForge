@@ -34,9 +34,13 @@ stable `=0.1.0`.
   weight. A permanent TypeCode gap is left at `0x0003_0F0B` / `0x0003_0F0C`.
 
 ### Fixed
-- GDPR `ErasurePending` (C3) is now enforced at the `RuntimeService` L2
-  admission boundary; previously it soft-passed on the dispatch path
-  because the in-compute instance view is unbound.
+- GDPR `ErasurePending` (C3) admission gate is enforced and live. The GDPR
+  lifecycle pointer is its own `UserGdprState` component
+  (`arkhe_forge_core::user`), so `GdprEraseUser` transitions it with a blind
+  write valid on the viewless dispatch path; the `RuntimeService` L2 admission
+  gate and the in-compute gate reject any actor-originated action whose backing
+  user is `ErasurePending` or the terminal `Erased`, before the action reaches
+  the WAL.
 - DEK AES-256-GCM nonce reuse across reconstruction: long-lived
   (KMS-unwrapped) DEKs now require nonce-misuse-resistant AES-256-GCM-SIV;
   plain AES-256-GCM is rejected for them (`PiiError::NonceReuseRisk`).

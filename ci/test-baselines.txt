@@ -4,5 +4,5 @@
 # arkhe-runtime-testkit + arkhe-{trait-default,subset-rust}-check + examples/card-primitives).
 # Format: `<config-name>=<count>` — KEY=VALUE per line.
 
-default=485
-all-features=543
+default=486
+all-features=544
