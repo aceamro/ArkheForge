@@ -169,6 +169,29 @@ pub enum JournalError {
         /// 0-based index of the first failing entry.
         index: usize,
     },
+    /// An entry's `signer_pubkey` did not match the pinned trust anchor.
+    /// `verify_chain` (self-consistency) cannot catch this — a forged log
+    /// re-signed under an attacker key is internally consistent. Only the
+    /// trust-anchored check ([`InMemoryJournal::verify_chain_anchored`])
+    /// rejects it.
+    #[error("journal signer key mismatch at entry {index}")]
+    SignerKeyMismatch {
+        /// 0-based index of the first entry signed under the wrong key.
+        index: usize,
+    },
+    /// The chain tip hash did not match the caller's pinned expectation —
+    /// the log was rewritten or replaced wholesale.
+    #[error("journal tip hash mismatch")]
+    TipMismatch,
+    /// The chain length did not match the caller's pinned expectation —
+    /// e.g. a truncated (rolled-back) log.
+    #[error("journal length mismatch: expected {expected}, got {actual}")]
+    LengthMismatch {
+        /// Length the caller pinned.
+        expected: usize,
+        /// Length actually present.
+        actual: usize,
+    },
     /// Backend I/O error — used by the WAL-backed path.
     #[error("journal backend error: {0}")]
     BackendIo(String),
@@ -185,10 +208,18 @@ pub trait PersistentJournal {
         signer: &dyn JournalSigner,
     ) -> Result<JournalEntry, JournalError>;
 
-    /// Full chain integrity + signature verification. Returns `Ok(())` if
-    /// every entry's `entry_hash` matches its re-computation **and** every
-    /// signature validates under `signer_pubkey`; otherwise surfaces the
-    /// first failing index.
+    /// **Self-consistency check only.** Returns `Ok(())` if every entry's
+    /// `entry_hash` matches its re-computation **and** every signature
+    /// validates under the entry's OWN embedded `signer_pubkey`; otherwise
+    /// surfaces the first failing index.
+    ///
+    /// This does NOT establish producer authenticity: each entry is verified
+    /// against its own embedded key, so an attacker holding any keypair can
+    /// re-sign every entry and forge a fully self-consistent journal that
+    /// passes this check. Use
+    /// [`InMemoryJournal::verify_chain_anchored`] to pin a trusted key plus
+    /// the expected tip + length when the producer is untrusted (mirror of
+    /// the kernel's `verify_chain` vs `verify_chain_anchored` split).
     fn verify_chain(&self) -> Result<(), JournalError>;
 
     /// Last entry's `entry_hash`, or [`GENESIS_PREV_HASH`] for an empty
@@ -232,6 +263,48 @@ impl InMemoryJournal {
     /// publishers.
     pub fn entries(&self) -> &[JournalEntry] {
         &self.entries
+    }
+
+    /// Trust-anchored verification — the consumer-side check under an
+    /// untrusted-producer threat model. Mirrors the kernel's
+    /// `verify_chain_anchored`: in addition to the self-consistency check
+    /// run by [`verify_chain`](PersistentJournal::verify_chain), it
+    ///
+    /// * asserts every entry was signed under `trusted_pubkey` (rejects a
+    ///   forged log re-signed under an attacker key —
+    ///   [`JournalError::SignerKeyMismatch`]),
+    /// * asserts the chain tip equals `expected_tip`
+    ///   ([`JournalError::TipMismatch`]),
+    /// * asserts the entry count equals `expected_len`
+    ///   ([`JournalError::LengthMismatch`] — catches truncation / rollback).
+    ///
+    /// `verify_chain()` alone is insufficient when the producer is
+    /// untrusted: each entry validates against its OWN embedded
+    /// `signer_pubkey`, so any keypair forges a self-consistent log.
+    pub fn verify_chain_anchored(
+        &self,
+        trusted_pubkey: &[u8; 32],
+        expected_tip: &[u8; 32],
+        expected_len: usize,
+    ) -> Result<(), JournalError> {
+        if self.entries.len() != expected_len {
+            return Err(JournalError::LengthMismatch {
+                expected: expected_len,
+                actual: self.entries.len(),
+            });
+        }
+        // Self-consistency (chain hashes + per-entry signatures) first.
+        self.verify_chain()?;
+        // Then pin every signer to the trust anchor.
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if &entry.signer_pubkey != trusted_pubkey {
+                return Err(JournalError::SignerKeyMismatch { index: idx });
+            }
+        }
+        if &self.tip_hash() != expected_tip {
+            return Err(JournalError::TipMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -302,7 +375,7 @@ impl PersistentJournal for InMemoryJournal {
 pub type ConsumedTokenJournal = InMemoryJournal;
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used)]
+#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -419,5 +492,87 @@ mod tests {
         // `ConsumedTokenJournal` alias keeps threshold.rs module-doc live.
         let j: ConsumedTokenJournal = InMemoryJournal::new();
         assert_eq!(j.len(), 0);
+    }
+
+    /// Rebuild a journal's entries from scratch, re-signing every entry under
+    /// `forger` — produces a fully self-consistent forgery (each entry's
+    /// embedded `signer_pubkey` matches its own signature).
+    fn forge_under(original: &InMemoryJournal, forger: &InMemoryJournalSigner) -> InMemoryJournal {
+        let mut j = InMemoryJournal::new();
+        for e in original.entries() {
+            j.append(e.token.clone(), forger)
+                .expect("forged append must succeed");
+        }
+        j
+    }
+
+    /// #7 — a forged journal re-signed under an attacker key PASSES the
+    /// self-consistency `verify_chain()` but FAILS `verify_chain_anchored()`
+    /// because no entry was signed under the pinned trusted key.
+    #[test]
+    fn anchored_rejects_forged_resigned_journal() {
+        let genuine_signer = test_signer(0x10);
+        let trusted_pubkey = genuine_signer.public_key();
+
+        let mut genuine = InMemoryJournal::new();
+        genuine
+            .append(make_token(0x01, 10), &genuine_signer)
+            .unwrap();
+        genuine
+            .append(make_token(0x02, 20), &genuine_signer)
+            .unwrap();
+        let expected_tip = genuine.tip_hash();
+        let expected_len = genuine.len();
+
+        // Genuine journal passes the anchored check.
+        assert!(genuine
+            .verify_chain_anchored(&trusted_pubkey, &expected_tip, expected_len)
+            .is_ok());
+
+        // Forge: re-sign the same tokens under a DIFFERENT key.
+        let forger = test_signer(0x99);
+        let forged = forge_under(&genuine, &forger);
+
+        // The forgery is internally consistent — self-check passes.
+        assert!(
+            forged.verify_chain().is_ok(),
+            "forged log is self-consistent under its own key",
+        );
+        // But the trust anchor rejects it: entry 0 is signed under the wrong key.
+        match forged.verify_chain_anchored(&trusted_pubkey, &expected_tip, expected_len) {
+            Err(JournalError::SignerKeyMismatch { index: 0 }) => {}
+            other => panic!("expected SignerKeyMismatch {{ index: 0 }}, got {other:?}"),
+        }
+    }
+
+    /// #7 — a truncated journal fails the length / tip check.
+    #[test]
+    fn anchored_rejects_truncated_journal() {
+        let signer = test_signer(0x11);
+        let trusted_pubkey = signer.public_key();
+
+        let mut j = InMemoryJournal::new();
+        j.append(make_token(0x01, 10), &signer).unwrap();
+        j.append(make_token(0x02, 20), &signer).unwrap();
+        let full_tip = j.tip_hash();
+        let full_len = j.len();
+
+        // Truncate the last entry (rollback attack).
+        j.entries.pop();
+
+        // Length check fires first.
+        match j.verify_chain_anchored(&trusted_pubkey, &full_tip, full_len) {
+            Err(JournalError::LengthMismatch {
+                expected: 2,
+                actual: 1,
+            }) => {}
+            other => panic!("expected LengthMismatch, got {other:?}"),
+        }
+
+        // Even when the caller pins the truncated length, the tip mismatch fires.
+        match j.verify_chain_anchored(&trusted_pubkey, &full_tip, j.len()) {
+            Err(JournalError::TipMismatch) => {}
+            other => panic!("expected TipMismatch, got {other:?}"),
+        }
     }
 }
