@@ -6,7 +6,7 @@
 #   cargo vet                          # fetch crates.io and check approvals
 #   cargo vet diff <crate> <old> <new> # review a version diff
 #
-# Trust base: Google / Mozilla / Bytecode Alliance audit imports.
+# Trust base: Google / Mozilla audit imports.
 # Each runtime crate carries an explicit criteria.
 
 [cargo-vet]
@@ -21,15 +21,12 @@ description = "Linkable into a production binary. No RCE or supply-chain backdoo
 [[criteria.safe-to-run]]
 description = "Runs in build / test environments only. Must not enter the binary."
 
-# External audit imports — three trust bases.
+# External audit imports — two trust bases.
 [imports.google]
 url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.toml"
 
 [imports.mozilla]
 url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[imports.bytecode-alliance]
-url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
 
 # Per-workspace-crate criteria.
 [policy.arkhe-kernel]
