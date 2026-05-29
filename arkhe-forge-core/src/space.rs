@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use serde::{Deserialize, Serialize};
 
-use crate::action::ActionCompute;
+use crate::action::{ActionCompute, GdprGuard};
 use crate::actor::ActorId;
 use crate::brand::ShellId;
 use crate::component::BoundedString;
@@ -168,6 +168,12 @@ impl ActionCompute for CreateSpace {
             },
         )?;
         Ok(())
+    }
+}
+
+impl GdprGuard for CreateSpace {
+    fn gdpr_actor(&self) -> Option<ActorId> {
+        Some(self.config.creator)
     }
 }
 

@@ -8,6 +8,7 @@
 use arkhe_kernel::abi::TypeCode;
 use serde::{Deserialize, Serialize};
 
+use crate::actor::ActorId;
 use crate::context::{ActionContext, ActionError};
 
 /// Determinism band classification.
@@ -52,4 +53,26 @@ pub trait ActionCompute: crate::__sealed::__Sealed + ArkheAction {
     /// Run the compute body. Emit events via `ctx.emit_event`, derive new
     /// ids via `ctx.next_id`, and return `Err(ActionError::...)` to reject.
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError>;
+}
+
+/// L2 admission hook for the GDPR `ErasurePending` (C3) gate.
+///
+/// The kernel `compute` path drives forge actions through
+/// [`crate::bridge::kernel_compute`], which builds a viewless
+/// [`ActionContext`]. With no bound view,
+/// [`ActionContext::ensure_actor_eligible`] soft-passes (it cannot read
+/// the actor's `UserBinding` / `UserProfile`). The L2 service layer
+/// therefore reads this trait BEFORE submitting: if `gdpr_actor` returns
+/// `Some(actor)`, the service binds a fresh `InstanceView` and runs the
+/// in-compute eligibility check as an admission gate, rejecting an
+/// `ErasurePending`-backed action before it reaches the WAL.
+///
+/// The default returns `None` (not user-scoped) so kernel-only actions and
+/// any action that does not gate on actor erasure compile unchanged.
+pub trait GdprGuard {
+    /// Actor whose erasure-eligibility must be checked before admission.
+    /// `None` = the action is not user-scoped (default).
+    fn gdpr_actor(&self) -> Option<ActorId> {
+        None
+    }
 }

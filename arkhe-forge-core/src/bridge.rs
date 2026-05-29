@@ -43,6 +43,21 @@
 //!    (rejections invisible in the WAL stream) is tracked as a
 //!    future hardening carry.
 //!
+//! 4. **Viewless context — the in-compute GDPR `ErasurePending` gate
+//!    soft-passes here.** The bridge builds an
+//!    `ActionContext` with no bound `InstanceView` (the kernel exposes
+//!    no per-entity read into compute), so
+//!    [`ActionContext::ensure_actor_eligible`] cannot resolve the
+//!    actor's `UserBinding` / `UserProfile` and returns `Ok` (soft
+//!    pass). This is NOT a hole: the E-user-3 C3 gate is enforced at
+//!    the L2 boundary by the `RuntimeService::dispatch` admission gate
+//!    (forge-platform), which reads the action's `GdprGuard::gdpr_actor`,
+//!    binds the kernel `InstanceView`, and runs the same
+//!    `ensure_actor_eligible` check BEFORE `submit` — rejecting an
+//!    erasure-pending action before it reaches the WAL. The direct
+//!    `ActionContext::new(...).with_view(&view)` path (non-dispatch
+//!    callers) enforces the gate in-compute because it binds a view.
+//!
 //! ## Caller preconditions
 //!
 //! The bridge is currently scoped to a narrow forge-action shape; the

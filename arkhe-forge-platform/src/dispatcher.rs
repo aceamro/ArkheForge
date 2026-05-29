@@ -38,12 +38,46 @@
 //! them through the forge `ActionContext` builder directly while the
 //! L2 layer matures.
 
+use arkhe_forge_core::action::GdprGuard;
+use arkhe_forge_core::context::{ActionContext, ActionError};
+use arkhe_forge_core::user::UserId;
 use arkhe_kernel::abi::{ArkheError, CapabilityMask, InstanceId, Principal, Tick};
 use arkhe_kernel::state::traits::Action;
 use arkhe_kernel::state::InstanceConfig;
 use arkhe_kernel::{Kernel, StepReport, Wal};
 
 use crate::wal_export::{BufferedWalSink, WalExportError, WalRecordSink};
+
+/// Error surface for [`RuntimeService::dispatch`].
+///
+/// `dispatch` is forge's own maturing L2 API, so it returns this richer
+/// enum rather than the kernel's [`ArkheError`] directly: the GDPR
+/// `ErasurePending` admission gate (C3) is an L2 concern with no kernel
+/// error variant, so it is surfaced as its own arm. Kernel-level errors
+/// pass through [`DispatchError::Kernel`] unchanged.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DispatchError {
+    /// Kernel-side error from `submit` / `step` (e.g. `InstanceNotFound`).
+    #[error("kernel error: {0}")]
+    Kernel(#[from] ArkheError),
+
+    /// L2 admission gate rejected the action: the actor's backing user is
+    /// in `GdprStatus::ErasurePending`, so the action is refused before it
+    /// reaches the WAL (E-user-3 C3 — admission control at the L2 boundary).
+    #[error("user erasure pending: {user:?} scheduled at {tick:?}")]
+    ErasurePending {
+        /// Backing user whose erasure is in flight.
+        user: UserId,
+        /// Tick at which the action was attempted.
+        tick: Tick,
+    },
+
+    /// The admission-gate probe read corrupt view bytes while resolving the
+    /// actor's `UserBinding` / `UserProfile`. Fail closed rather than admit.
+    #[error("GDPR admission probe failed: corrupt view state")]
+    ProbeViewCorrupt,
+}
 
 /// Errors surfaced by [`wal_to_sink`].
 #[derive(Debug, thiserror::Error)]
@@ -89,18 +123,33 @@ impl RuntimeService {
         self.kernel.create_instance(config)
     }
 
-    /// Dispatch a forge action — postcard-encode its canonical bytes,
-    /// submit at tick `at`, then step the kernel once with `caps`.
-    /// Returns the kernel's `StepReport` so the caller can inspect
-    /// `actions_executed` / `effects_applied` / `effects_denied`.
+    /// Dispatch a forge action — run the L2 GDPR admission gate,
+    /// postcard-encode its canonical bytes, submit at tick `at`, then
+    /// step the kernel once with `caps`. Returns the kernel's
+    /// `StepReport` so the caller can inspect `actions_executed` /
+    /// `effects_applied` / `effects_denied`.
+    ///
+    /// ## GDPR `ErasurePending` admission gate (C3)
+    ///
+    /// The kernel `compute` path drives a forge action through a viewless
+    /// [`ActionContext`] (see [`arkhe_forge_core::bridge`]), so the
+    /// in-compute `ensure_actor_eligible` check soft-passes — it cannot
+    /// read the actor's `UserBinding` / `UserProfile` without a bound
+    /// view. This method closes that gap at the L2 boundary: when the
+    /// action's [`GdprGuard::gdpr_actor`] returns `Some(actor)`, the
+    /// service binds a fresh `InstanceView`, runs the existing
+    /// `ensure_actor_eligible` logic, and REJECTS the action before
+    /// `submit` if the backing user is `ErasurePending`. An
+    /// erasure-pending action is never submitted and never reaches the WAL.
     ///
     /// # Errors
     ///
-    /// Returns the kernel's [`ArkheError`] surface verbatim. The
-    /// most common case is `InstanceNotFound` if `instance` is not
-    /// live; capability denial happens inside `step` and is reflected
-    /// in the returned report's `effects_denied` count rather than as
-    /// an `Err` from this function.
+    /// * [`DispatchError::ErasurePending`] — the L2 gate rejected the
+    ///   action (backing user in `GdprStatus::ErasurePending`).
+    /// * [`DispatchError::Kernel`] — kernel-side error from `submit`
+    ///   (`InstanceNotFound` if `instance` is not live). Capability denial
+    ///   happens inside `step` and is reflected in the returned report's
+    ///   `effects_denied` count rather than as an `Err`.
     pub fn dispatch<A>(
         &mut self,
         instance: InstanceId,
@@ -108,10 +157,33 @@ impl RuntimeService {
         action: &A,
         at: Tick,
         caps: CapabilityMask,
-    ) -> Result<StepReport, ArkheError>
+    ) -> Result<StepReport, DispatchError>
     where
-        A: Action,
+        A: Action + GdprGuard,
     {
+        // L2 admission gate (C3) — runs BEFORE submit, with the view
+        // dropped before the `&mut self.kernel` step call. Reuses the
+        // forge-core in-compute eligibility check; the probe context is
+        // read-only (zero world_seed, no Op emission).
+        if let Some(actor) = action.gdpr_actor() {
+            let view = self
+                .kernel
+                .instance_view(instance)
+                .ok_or(ArkheError::InstanceNotFound)?;
+            let probe = ActionContext::new([0u8; 32], instance, at, principal.clone(), caps)
+                .with_view(&view);
+            if let Err(err) = probe.ensure_actor_eligible(actor, at) {
+                return match err {
+                    ActionError::UserErasurePending { user, .. } => {
+                        Err(DispatchError::ErasurePending { user, tick: at })
+                    }
+                    // `ensure_actor_eligible` otherwise only fails with an
+                    // `InvalidInput` on corrupt view bytes; fail closed.
+                    _ => Err(DispatchError::ProbeViewCorrupt),
+                };
+            }
+        }
+
         let bytes = action.canonical_bytes();
         self.kernel
             .submit(instance, principal, None, at, A::TYPE_CODE, bytes)?;
@@ -200,6 +272,7 @@ mod tests {
                 }]
             }
         }
+        impl GdprGuard for NoopAction {}
 
         let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
         svc.register_action::<NoopAction>();
@@ -212,7 +285,10 @@ mod tests {
             Tick(1),
             CapabilityMask::SYSTEM,
         );
-        assert!(matches!(result, Err(ArkheError::InstanceNotFound)));
+        assert!(matches!(
+            result,
+            Err(DispatchError::Kernel(ArkheError::InstanceNotFound))
+        ));
     }
 
     /// Happy-path dispatch — register → create_instance → dispatch
@@ -236,6 +312,7 @@ mod tests {
                 }]
             }
         }
+        impl GdprGuard for SpawnOne {}
 
         let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
         svc.register_action::<SpawnOne>();
@@ -276,6 +353,7 @@ mod tests {
                 }]
             }
         }
+        impl GdprGuard for SpawnOne {}
 
         let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
         svc.register_action::<SpawnOne>();
@@ -326,6 +404,7 @@ mod tests {
                 }]
             }
         }
+        impl GdprGuard for SpawnAt {}
 
         let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
         svc.register_action::<SpawnAt>();
@@ -348,5 +427,165 @@ mod tests {
         wal_to_sink(&wal, &mut sink).unwrap();
         assert!(!buffer.is_empty());
         assert!(buffer.starts_with(&crate::wal_export::STREAM_HEADER_MAGIC));
+    }
+
+    /// End-to-end proof of the #2 L2 GDPR admission gate.
+    ///
+    /// A test-only seeding action writes a `UserBinding` (actor → user) plus a
+    /// `UserProfile { gdpr_status }` into a live kernel instance so the
+    /// `InstanceView` the gate reads is populated. A real forge `CreateSpace`
+    /// for an `ErasurePending` user is then REJECTED at dispatch (no WAL
+    /// record), while the same action for an `Active` user proceeds and
+    /// appends a record. This exercises the full
+    /// `RuntimeService::dispatch -> gdpr_actor -> instance_view ->
+    /// ensure_actor_eligible` path that the viewless bridge cannot cover.
+    #[test]
+    fn dispatch_rejects_erasure_pending_actor_before_wal() {
+        use arkhe_forge_core::actor::{ActorId, UserBinding};
+        use arkhe_forge_core::brand::ShellId;
+        use arkhe_forge_core::component::{ArkheComponent, BoundedString};
+        use arkhe_forge_core::space::{CreateSpace, SpaceConfig, SpaceKind, Visibility};
+        use arkhe_forge_core::user::{AuthKind, GdprStatus, UserId, UserProfile};
+        use arkhe_kernel::abi::{EntityId, TypeCode};
+        use arkhe_kernel::state::{ActionCompute, ActionContext, Op};
+        use arkhe_kernel::ArkheAction;
+        use serde::{Deserialize, Serialize};
+
+        // Test-only kernel action: stage `UserBinding` on the actor entity and
+        // `UserProfile` on the user entity so the gate's `InstanceView` reads
+        // are populated. Carries the desired GDPR status as a wire byte.
+        #[derive(Serialize, Deserialize, ArkheAction)]
+        #[arkhe(type_code = 0x0001_5105, schema_version = 1)]
+        struct SeedBinding {
+            actor: u64,
+            user: u64,
+            erasing: bool,
+        }
+
+        impl ActionCompute for SeedBinding {
+            fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
+                let binding = UserBinding {
+                    schema_version: 1,
+                    user_id: UserId::new(EntityId::new(self.user).unwrap()),
+                };
+                let profile = UserProfile {
+                    schema_version: 1,
+                    created_tick: Tick(0),
+                    primary_auth_kind: AuthKind::Passkey,
+                    gdpr_status: if self.erasing {
+                        GdprStatus::ErasurePending
+                    } else {
+                        GdprStatus::Active
+                    },
+                };
+                let bb = postcard::to_allocvec(&binding).unwrap();
+                let pb = postcard::to_allocvec(&profile).unwrap();
+                vec![
+                    Op::SetComponent {
+                        entity: EntityId::new(self.actor).unwrap(),
+                        type_code: TypeCode(UserBinding::TYPE_CODE),
+                        size: bb.len() as u64,
+                        bytes: bytes::Bytes::from(bb),
+                    },
+                    Op::SetComponent {
+                        entity: EntityId::new(self.user).unwrap(),
+                        type_code: TypeCode(UserProfile::TYPE_CODE),
+                        size: pb.len() as u64,
+                        bytes: bytes::Bytes::from(pb),
+                    },
+                ]
+            }
+        }
+        impl GdprGuard for SeedBinding {}
+
+        fn create_space(actor: ActorId) -> CreateSpace {
+            CreateSpace {
+                schema_version: 1,
+                config: SpaceConfig {
+                    schema_version: 1,
+                    shell_id: ShellId([0xC3; 16]),
+                    slug: BoundedString::<32>::new("forbidden").unwrap(),
+                    kind: SpaceKind::Flat,
+                    visibility: Visibility::Public,
+                    creator: actor,
+                    parent_space: None,
+                    created_tick: Tick(100),
+                },
+            }
+        }
+
+        // --- ErasurePending user is rejected, no WAL record ---
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<SeedBinding>();
+        svc.register_action::<CreateSpace>();
+        let inst = svc.create_instance(InstanceConfig::default());
+
+        svc.dispatch(
+            inst,
+            Principal::System,
+            &SeedBinding {
+                actor: 8,
+                user: 7,
+                erasing: true,
+            },
+            Tick(1),
+            CapabilityMask::SYSTEM,
+        )
+        .expect("seed must succeed");
+        let after_seed = svc.kernel.wal_record_count();
+        assert_eq!(after_seed, Some(1), "seed action appends one record");
+
+        let rejected = svc.dispatch(
+            inst,
+            Principal::System,
+            &create_space(ActorId::new(EntityId::new(8).unwrap())),
+            Tick(2),
+            CapabilityMask::SYSTEM,
+        );
+        match rejected {
+            Err(DispatchError::ErasurePending { user, tick }) => {
+                assert_eq!(user, UserId::new(EntityId::new(7).unwrap()));
+                assert_eq!(tick, Tick(2));
+            }
+            other => panic!("expected ErasurePending rejection, got {:?}", other),
+        }
+        assert_eq!(
+            svc.kernel.wal_record_count(),
+            Some(1),
+            "rejected action must NOT append a WAL record",
+        );
+
+        // --- Active user proceeds and appends a record ---
+        let mut svc2 = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc2.register_action::<SeedBinding>();
+        svc2.register_action::<CreateSpace>();
+        let inst2 = svc2.create_instance(InstanceConfig::default());
+        svc2.dispatch(
+            inst2,
+            Principal::System,
+            &SeedBinding {
+                actor: 8,
+                user: 7,
+                erasing: false,
+            },
+            Tick(1),
+            CapabilityMask::SYSTEM,
+        )
+        .expect("seed must succeed");
+        let report = svc2
+            .dispatch(
+                inst2,
+                Principal::System,
+                &create_space(ActorId::new(EntityId::new(8).unwrap())),
+                Tick(2),
+                CapabilityMask::SYSTEM,
+            )
+            .expect("Active user must proceed");
+        assert_eq!(report.actions_executed, 1);
+        assert_eq!(
+            svc2.kernel.wal_record_count(),
+            Some(2),
+            "Active-user action appends a second WAL record",
+        );
     }
 }

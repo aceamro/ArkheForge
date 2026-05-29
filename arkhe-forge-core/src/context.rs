@@ -512,8 +512,23 @@ impl<'i> ActionContext<'i> {
     /// E-user-3 C3 helper — fail an actor-originated compute when the
     /// actor's backing user is in `GdprStatus::ErasurePending`. `Ok(None)`
     /// from the underlying reads (no view bound, anonymous actor, etc.)
-    /// is treated as a soft pass — the L2 service layer guarantees the
-    /// view is bound for production paths.
+    /// is treated as a soft pass.
+    ///
+    /// The soft pass means this check is only effective when a view is
+    /// bound. Two paths bind one:
+    ///
+    /// * **Direct path** — callers that build the context via
+    ///   `ActionContext::new(...).with_view(&view)` enforce the gate
+    ///   in-compute.
+    /// * **Dispatch path** — actions driven through
+    ///   `RuntimeService::dispatch` (forge-platform) run with a viewless
+    ///   bridge context (see [`crate::bridge`]), so this in-compute call
+    ///   soft-passes. For that path the gate is enforced at the L2
+    ///   admission boundary: `dispatch` reads the action's
+    ///   [`GdprGuard::gdpr_actor`](crate::action::GdprGuard::gdpr_actor),
+    ///   binds the kernel `InstanceView`, and runs this same check BEFORE
+    ///   `submit`, rejecting an erasure-pending action before it reaches
+    ///   the WAL.
     pub fn ensure_actor_eligible(
         &self,
         actor: ActorId,

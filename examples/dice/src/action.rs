@@ -23,7 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use arkhe_forge_core::action::ActionCompute;
+use arkhe_forge_core::action::{ActionCompute, GdprGuard};
 use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::{arkhe_pure, ArkheAction, ArkheEvent};
 
@@ -168,3 +168,7 @@ impl ActionCompute for RecordDiceRoll {
         Ok(())
     }
 }
+
+// Not user-scoped — the dice roll is system-originated, so the L2 GDPR
+// admission gate does not apply. Default (None).
+impl GdprGuard for RecordDiceRoll {}

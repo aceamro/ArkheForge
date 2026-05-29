@@ -14,7 +14,7 @@ use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::action::ActionCompute;
+use crate::action::{ActionCompute, GdprGuard};
 use crate::actor::ActorId;
 use crate::brand::{ShellBrand, ShellId};
 use crate::context::{ActionContext, ActionError};
@@ -367,6 +367,12 @@ impl ActionCompute for SubmitActivity {
     }
 }
 
+impl GdprGuard for SubmitActivity {
+    fn gdpr_actor(&self) -> Option<ActorId> {
+        Some(self.record.actor)
+    }
+}
+
 impl ActionCompute for RetractActivity {
     #[arkhe_pure]
     fn compute<'i>(&self, _ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
@@ -376,6 +382,10 @@ impl ActionCompute for RetractActivity {
         Ok(())
     }
 }
+
+// Retract carries no fresh actor-originated write — the tombstone targets an
+// existing record, so it does not gate on backing-user erasure. Default (None).
+impl GdprGuard for RetractActivity {}
 
 /// Hard cap on meta-verb depth — the runtime WAL bound on
 /// `manifest.moderation.appeal_max_depth` (E-act-5). Shell manifest values must
