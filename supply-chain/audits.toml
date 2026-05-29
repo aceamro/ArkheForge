@@ -108,16 +108,17 @@ elimination. The unsafe blocks are limited to the volatile write paths
 
 [[audits.ml-dsa]]
 who      = "cryptographer <noreply@arkheforge.invalid>"
-version  = "0.1.0-rc.9"
+version  = "0.1.0"
 criteria = "safe-to-deploy"
 notes    = """
 PQC Hybrid mandate — NIST FIPS 204 ML-DSA 65 (Dilithium-3)
 post-quantum signature primitive. Paired with ed25519-dalek for Hybrid
 dual-sign (AND-mode verify) per CNSA 2.0 transition spec. Maintained by
-the RustCrypto org (signatures repo). Pre-release pin (0.1.0-rc.9) follows
-the RustCrypto early-stage convention before 1.0 stabilisation. Source
+the RustCrypto org (signatures repo). Now at the first stable point
+release 0.1.0 (consumed transitively via arkhe-kernel 0.14). Source
 review:
-- KeyGen::from_seed deterministic ✓ (FIPS 204 ML-DSA.KeyGen_internal)
+- SigningKey::<MlDsa65>::from_seed deterministic ✓ (FIPS 204
+  ML-DSA.KeyGen_internal; the `KeyGen` trait was removed at 0.1.0)
 - Signer::sign default = sign_deterministic (no RNG dependency) ✓
 - Fixed sizes: SigningKey 4032B / VerifyingKey 1952B / Signature 3309B
   (FIPS 204 §4 spec match)

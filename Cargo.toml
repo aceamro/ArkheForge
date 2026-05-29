@@ -36,8 +36,8 @@ members = [
 
 # Workspace dependency version pinning (shared).
 [workspace.dependencies]
-arkhe-kernel       = "0.13"
-arkhe-macros       = "0.13"
+arkhe-kernel       = "0.14"
+arkhe-macros       = "0.14"
 arkhe-rand         = "0.13"
 serde              = { version = "1.0",  features = ["derive"] }
 postcard           = { version = "1.0",  features = ["use-std"] }

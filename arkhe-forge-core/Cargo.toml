@@ -14,8 +14,8 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-kernel        = "0.13"
-arkhe-macros        = "0.13"
+arkhe-kernel        = "0.14"
+arkhe-macros        = "0.14"
 arkhe-forge-macros  = { path = "../arkhe-forge-macros", version = "0.13" }
 serde               = { workspace = true }
 postcard            = { workspace = true }

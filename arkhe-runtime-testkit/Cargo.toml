@@ -14,7 +14,7 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-kernel        = "0.13"
+arkhe-kernel        = "0.14"
 arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.13" }
 proptest            = { workspace = true }
 
