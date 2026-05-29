@@ -165,7 +165,10 @@ pub fn verify_attestation(
 /// # Errors
 ///
 /// - [`VerifyError::EnvelopeIncoherent`] — the PQC slot presence does
-///   not match the policy class.
+///   not match the policy class, or a pure-PQC (`MlDsa65`) envelope
+///   carries a non-empty classical half.
+/// - [`VerifyError::WrongSignatureLength`] — a `Hybrid` envelope's
+///   classical half is not exactly 64 bytes (`ED25519_SIG_LEN`).
 /// - [`VerifyError::SignatureRequired`] — the class is `None`.
 /// - any error from [`verify_attestation`] for the dispatched arm.
 pub fn verify_receipt_envelope(
@@ -195,6 +198,12 @@ pub fn verify_receipt_envelope(
             attestation_64,
         ),
         RuntimeSignatureClass::MlDsa65 => {
+            // A pure-PQC class carries NO classical half; a non-empty
+            // `attestation_64` is dead material the dispatch would ignore,
+            // so reject it up front (mirrors the PQC-slot strictness).
+            if !attestation_64.is_empty() {
+                return Err(VerifyError::EnvelopeIncoherent);
+            }
             // pqc_required holds => the slot is Some; bind it without
             // unwrap so a future refactor can never panic here.
             match attestation_pqc {
@@ -206,6 +215,14 @@ pub fn verify_receipt_envelope(
         }
         RuntimeSignatureClass::Hybrid => match attestation_pqc {
             Some(pqc) => {
+                // Validate the classical-half width BEFORE concat so the
+                // ed25519/mldsa boundary is canonical at the envelope
+                // layer, not re-imposed downstream by split_at. A wrong
+                // width would otherwise survive into a total-length-only
+                // check and re-split at a different boundary.
+                if attestation_64.len() != ED25519_SIG_LEN {
+                    return Err(VerifyError::WrongSignatureLength);
+                }
                 // Reassemble the canonical Hybrid signature:
                 // ed25519(64) ++ mldsa(3309). verify_attestation applies
                 // the explicit length checks.
@@ -659,6 +676,44 @@ mod tests {
         let err =
             verify_receipt_envelope(RuntimeSignatureClass::None, &[], b"m", &[], None).unwrap_err();
         assert_eq!(err, VerifyError::SignatureRequired);
+    }
+
+    #[test]
+    fn envelope_incoherent_mldsa65_with_nonempty_classical_slot() {
+        // A pure-PQC MlDsa65 envelope carries no classical half; a
+        // non-empty `attestation_64` is dead material and must be rejected
+        // before dispatch (mirrors the PQC-slot strictness). The PQC slot
+        // is present so the slot-presence coherence check passes and this
+        // guard is the one exercised — feature-agnostic (it fires before
+        // any verify, so it holds in both the default and the
+        // tier-2-pqc-receipts build).
+        let err = verify_receipt_envelope(
+            RuntimeSignatureClass::MlDsa65,
+            &[0u8; MLDSA65_PK_LEN],
+            b"m",
+            &[0u8; ED25519_SIG_LEN],
+            Some(&[0u8; MLDSA65_SIG_LEN]),
+        )
+        .unwrap_err();
+        assert_eq!(err, VerifyError::EnvelopeIncoherent);
+    }
+
+    #[test]
+    fn envelope_hybrid_mis_split_classical_half_rejected() {
+        // The Hybrid classical half must be exactly ED25519_SIG_LEN before
+        // concat — a mis-sized classical half is rejected up front rather
+        // than re-split at a non-canonical boundary downstream. The PQC
+        // slot is present so the slot-presence coherence check passes;
+        // this width guard fires before any verify (feature-agnostic).
+        let err = verify_receipt_envelope(
+            RuntimeSignatureClass::Hybrid,
+            &[0u8; ED25519_PK_LEN + MLDSA65_PK_LEN],
+            b"m",
+            &[0u8; ED25519_SIG_LEN - 1],
+            Some(&[0u8; MLDSA65_SIG_LEN]),
+        )
+        .unwrap_err();
+        assert_eq!(err, VerifyError::WrongSignatureLength);
     }
 
     #[cfg(feature = "tier-2-pqc-receipts")]
