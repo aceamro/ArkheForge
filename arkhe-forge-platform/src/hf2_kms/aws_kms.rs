@@ -30,7 +30,7 @@ use tokio::runtime::{Handle, Runtime};
 use arkhe_forge_core::event::RuntimeSignatureClass;
 use arkhe_forge_core::pii::DekId;
 
-use crate::crypto::Dek;
+use crate::crypto::{Dek, DekConfig};
 use crate::crypto_erasure::DekShredAttestation;
 
 use super::kms_backend::{KekRef, KeyDeletionAttestation, KmsBackend, KmsError};
@@ -200,7 +200,9 @@ impl KmsBackend for AwsKmsBackend {
             }
             let mut material = [0u8; 32];
             material.copy_from_slice(&bytes);
-            Ok(Dek::from_bytes(material))
+            // Unwrapped from durable KMS material — long-lived; admitted only
+            // under AES-256-GCM-SIV (counter resets on each reconstruction).
+            Ok(Dek::from_unwrapped(material, DekConfig::default()))
         })
     }
 

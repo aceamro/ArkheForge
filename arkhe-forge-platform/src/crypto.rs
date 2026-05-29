@@ -52,6 +52,26 @@ pub struct DekConfig {
     pub replica_id: u32,
 }
 
+/// DEK lifetime relative to the process. The distinction is a nonce-reuse
+/// safety boundary for the deterministic counter nonce:
+///
+/// * [`DekLifecycle::Ephemeral`] — the `Dek` lives for at most the current
+///   process; the in-memory counter is authoritative for its whole life, so
+///   the deterministic counter never repeats and plain AES-256-GCM is safe.
+/// * [`DekLifecycle::LongLived`] — the `Dek` was reconstructed from durable
+///   wrapped material (a KMS `unwrap_dek`) and may outlive the process. The
+///   counter resets to `0` on every reconstruction, so plain AES-256-GCM
+///   would reuse nonces under a fixed key (catastrophic). Such DEKs are
+///   admitted only under the nonce-misuse-resistant `Aes256GcmSiv`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DekLifecycle {
+    /// Process-bound; counter is authoritative for the key's whole life.
+    Ephemeral,
+    /// Reconstructed from durable wrapped material; counter resets on each
+    /// reconstruction, so plain AES-256-GCM is unsafe (must use SIV).
+    LongLived,
+}
+
 /// Per-user 32-byte DEK material. The byte buffer is
 /// wiped on `Drop` via the `zeroize` crate; callers obtain a `Dek` from
 /// an HSM unwrap — the runtime never derives key material directly
@@ -97,6 +117,10 @@ pub struct Dek {
     /// construction — see [`DekConfig::replica_id`].
     #[zeroize(skip)]
     replica_id: u32,
+    /// Lifetime classification — gates the AES-256-GCM nonce-reuse guard.
+    /// Not sensitive; skipped by zeroize.
+    #[zeroize(skip)]
+    lifecycle: DekLifecycle,
 }
 
 impl Dek {
@@ -113,6 +137,7 @@ impl Dek {
     /// Construct from a 32-byte buffer with an explicit [`DekConfig`].
     /// Federation path consumes this entry point with a non-zero
     /// `replica_id`; single-writer deployments use [`Dek::from_bytes`].
+    /// Lifecycle is [`DekLifecycle::Ephemeral`] — process-bound.
     #[inline]
     #[must_use]
     pub fn with_config(material: [u8; 32], config: DekConfig) -> Self {
@@ -120,12 +145,38 @@ impl Dek {
             material,
             counter: Cell::new(0),
             replica_id: config.replica_id,
+            lifecycle: DekLifecycle::Ephemeral,
         }
+    }
+
+    /// Construct a [`DekLifecycle::LongLived`] DEK from durable wrapped
+    /// material — the KMS `unwrap_dek` entry point. Because the counter
+    /// resets to `0` on every reconstruction, a long-lived DEK is admitted
+    /// only under `AeadKind::Aes256GcmSiv`; the AES-256-GCM encrypt path
+    /// rejects it with [`PiiError::NonceReuseRisk`].
+    #[inline]
+    #[must_use]
+    pub fn from_unwrapped(material: [u8; 32], config: DekConfig) -> Self {
+        Self {
+            material,
+            counter: Cell::new(0),
+            replica_id: config.replica_id,
+            lifecycle: DekLifecycle::LongLived,
+        }
+    }
+
+    /// Lifetime classification — see [`DekLifecycle`].
+    #[inline]
+    #[must_use]
+    #[cfg_attr(not(feature = "tier-2-multi-kms"), allow(dead_code))]
+    pub fn lifecycle(&self) -> DekLifecycle {
+        self.lifecycle
     }
 
     /// Construct from a byte slice. Rejects the call with
     /// [`PiiError::InvalidKeyLength`] when `bytes.len() != 32`.
-    /// Counter starts at `0` with default [`DekConfig`].
+    /// Counter starts at `0` with default [`DekConfig`]; lifecycle is
+    /// [`DekLifecycle::Ephemeral`].
     ///
     /// The length check is a single `usize` compare against the
     /// constant `32` — no byte-by-byte value comparison happens on
@@ -142,6 +193,7 @@ impl Dek {
             material,
             counter: Cell::new(0),
             replica_id: 0,
+            lifecycle: DekLifecycle::Ephemeral,
         })
     }
 
@@ -633,6 +685,14 @@ impl<N: NonceSource> CryptoCoordinator<N> {
         use aes_gcm::aead::{Aead, KeyInit, Payload};
         use aes_gcm::{Aes256Gcm, Key, Nonce};
 
+        // Nonce-reuse guard — a long-lived (KMS-unwrapped) DEK resets its
+        // counter to 0 on every reconstruction, so plain AES-256-GCM would
+        // reuse nonces under a fixed key (catastrophic). Reject; such DEKs
+        // must use the misuse-resistant SIV path.
+        if dek.lifecycle() == DekLifecycle::LongLived {
+            return Err(PiiError::NonceReuseRisk);
+        }
+
         // Deterministic counter nonce (NIST SP 800-38D §8.2.1). Counter
         // exhaustion is surfaced by `advance_counter` before any AEAD
         // work starts, so a failed call never consumes a nonce value.
@@ -1059,6 +1119,63 @@ mod tests {
         assert_eq!(env.aead_kind, AeadKind::Aes256GcmSiv);
         let back: ActorHandle = coord.decrypt(&env, &dek).unwrap();
         assert_eq!(back, handle);
+    }
+
+    /// #3 regression — a long-lived (KMS-unwrapped) DEK MUST be refused on
+    /// the plain AES-256-GCM path. The deterministic counter resets to 0 on
+    /// every reconstruction, so plain GCM would reuse nonces under a fixed
+    /// key. The guard rejects with `NonceReuseRisk`.
+    #[cfg(feature = "tier-2-multi-kms")]
+    #[test]
+    fn long_lived_dek_rejected_under_plain_aes_gcm() {
+        let coord = CryptoCoordinator::new(AeadKind::Aes256Gcm, FixedNonce);
+        let dek = Dek::from_unwrapped([0x9C; 32], DekConfig::default());
+        assert_eq!(dek.lifecycle(), DekLifecycle::LongLived);
+        let handle = ActorHandle(b"long-lived".to_vec());
+        let out = coord.encrypt(&handle, &dek, make_dek_id(0x31));
+        assert!(
+            matches!(out, Err(PiiError::NonceReuseRisk)),
+            "long-lived DEK must be refused under plain AES-256-GCM",
+        );
+    }
+
+    /// #3 regression — under SIV, a long-lived DEK reconstructed twice (each
+    /// reconstruction resets the counter to 0, so both encrypts use the SAME
+    /// nonce) does NOT catastrophically leak: SIV is nonce-misuse-resistant,
+    /// so identical (key, nonce, aad, plaintext) yields identical ciphertext
+    /// (deterministic, safe) and each round-trips correctly. This is the
+    /// smallest cure that keeps deterministic replay intact.
+    #[cfg(feature = "tier-2-multi-kms")]
+    #[test]
+    fn long_lived_dek_under_siv_survives_counter_reset() {
+        let coord = CryptoCoordinator::new(AeadKind::Aes256GcmSiv, FixedNonce);
+        let handle = ActorHandle(b"siv-survivor".to_vec());
+
+        // First process incarnation.
+        let dek1 = Dek::from_unwrapped([0xA1; 32], DekConfig::default());
+        let env1 = coord.encrypt(&handle, &dek1, make_dek_id(0x41)).unwrap();
+        assert_eq!(env1.aead_kind, AeadKind::Aes256GcmSiv);
+
+        // Second incarnation — same material, counter reset to 0 → SAME nonce.
+        let dek2 = Dek::from_unwrapped([0xA1; 32], DekConfig::default());
+        let env2 = coord.encrypt(&handle, &dek2, make_dek_id(0x41)).unwrap();
+
+        let NonceBytes::Short12(n1) = &env1.nonce else {
+            panic!("SIV returns Short12");
+        };
+        let NonceBytes::Short12(n2) = &env2.nonce else {
+            panic!("SIV returns Short12");
+        };
+        assert_eq!(n1, n2, "counter reset reproduces the same nonce");
+        // SIV determinism: same (key, nonce, aad, plaintext) → same ciphertext.
+        // Under plain GCM this nonce reuse would be catastrophic; under SIV it
+        // is merely a deterministic re-encryption that still round-trips.
+        assert_eq!(
+            env1.ciphertext, env2.ciphertext,
+            "SIV is deterministic; reuse is non-catastrophic",
+        );
+        assert_eq!(coord.decrypt::<ActorHandle>(&env1, &dek2).unwrap(), handle);
+        assert_eq!(coord.decrypt::<ActorHandle>(&env2, &dek1).unwrap(), handle);
     }
 
     #[cfg(feature = "tier-2-multi-kms")]

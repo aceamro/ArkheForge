@@ -442,6 +442,14 @@ pub enum PiiError {
     #[error("DEK nonce counter exhausted; rotation required")]
     DekExhausted,
 
+    /// A long-lived (KMS-unwrapped) DEK was asked to encrypt under plain
+    /// AES-256-GCM. The deterministic counter nonce resets to `0` on every
+    /// reconstruction, so a DEK that outlives the process would reuse
+    /// nonces under a fixed key (catastrophic GCM key recovery). Such DEKs
+    /// must use the nonce-misuse-resistant `AeadKind::Aes256GcmSiv`.
+    #[error("plain AES-256-GCM rejected for a long-lived DEK; use AES-256-GCM-SIV")]
+    NonceReuseRisk,
+
     /// Shell-scoped PII marker declared a `pii_code` outside the
     /// reserved `0x0100..=0xFFFF` range. Canonical
     /// codes (`0x0001..=0x00FF`) are owned by the sealed [`PiiType`]

@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use arkhe_forge_core::event::RuntimeSignatureClass;
 use arkhe_forge_core::pii::DekId;
 
-use crate::crypto::Dek;
+use crate::crypto::{Dek, DekConfig};
 use crate::crypto_erasure::DekShredAttestation;
 
 /// Reference to a KEK (Key Encryption Key) held by a KMS backend. Typically
@@ -264,7 +264,9 @@ impl KmsBackend for MockKmsBackend {
         let mut body = [0u8; 32];
         body.copy_from_slice(&wrapped[32..]);
         Self::xor_pad(&mut body, &kek.pad);
-        Ok(Dek::from_bytes(body))
+        // Unwrapped from durable material — long-lived; counter resets to 0
+        // on each reconstruction, so it is admitted only under AES-256-GCM-SIV.
+        Ok(Dek::from_unwrapped(body, DekConfig::default()))
     }
 
     fn delete_key(&self, kek_ref: &KekRef) -> Result<KeyDeletionAttestation, KmsError> {
