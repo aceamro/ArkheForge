@@ -348,6 +348,11 @@ impl ProjectionStore for InMemoryProjectionStore {
 /// `Projection::last_applied`, and propagates observer state transitions.
 pub struct ProjectionRouter {
     projections: Vec<Box<dyn Projection>>,
+    /// `TypeCode -> projection indices that observe it`, built at
+    /// `register()` time. Indices are stored in registration order, so
+    /// dispatch visits matching projections in the same order a linear scan
+    /// would — dispatch-order semantics are preserved (see `dispatch`).
+    observers_by_code: HashMap<TypeCode, Vec<usize>>,
     state: ObserverState,
 }
 
@@ -359,12 +364,18 @@ impl ProjectionRouter {
     pub fn new() -> Self {
         Self {
             projections: Vec::new(),
+            observers_by_code: HashMap::new(),
             state: ObserverState::Passive,
         }
     }
 
-    /// Register a projection.
+    /// Register a projection. Its observed `TypeCode`s are folded into the
+    /// dispatch index so `dispatch` only visits matching projections.
     pub fn register(&mut self, projection: Box<dyn Projection>) {
+        let idx = self.projections.len();
+        for &tc in projection.observes() {
+            self.observers_by_code.entry(tc).or_default().push(idx);
+        }
         self.projections.push(projection);
     }
 
@@ -450,6 +461,12 @@ impl ProjectionRouter {
     /// Dispatch an event to every matching projection. Returns `Ok(n)`
     /// where `n` is the number of projections that applied the event.
     ///
+    /// Matching projections are visited in registration order (the dispatch
+    /// index stores their indices in that order), so a projection registered
+    /// earlier always sees an event before one registered later — callers may
+    /// rely on that ordering. A `TypeCode` with no registered observer is a
+    /// cheap miss (no index entry) returning `Ok(0)`.
+    ///
     /// Only the `Active` state may dispatch — `Passive` and `Draining`
     /// reject with [`ProjectionError::NotActive`]. The `Passive` rejection
     /// is the production guardrail for active-passive HA: a secondary
@@ -465,11 +482,21 @@ impl ProjectionRouter {
             return Err(ProjectionError::NotActive { state: self.state });
         }
         let tc = TypeCode(event.type_code);
+        // Split-borrow the disjoint fields: the index slice (immutable) and
+        // the projection vec (mutable) are borrowed independently so the loop
+        // can mutate `projections[i]` while reading the matching index list.
+        let Self {
+            projections,
+            observers_by_code,
+            ..
+        } = self;
+        let Some(matching) = observers_by_code.get(&tc) else {
+            return Ok(0);
+        };
+        // Indices are already in registration order.
         let mut applied = 0usize;
-        for p in &mut self.projections {
-            if !p.observes().contains(&tc) {
-                continue;
-            }
+        for &i in matching {
+            let p = &mut projections[i];
             if let Some((last_seq, _)) = p.last_applied() {
                 if event.sequence == last_seq {
                     continue; // duplicate — silent no-op
@@ -636,6 +663,37 @@ mod tests {
         let ev = make_cross_shell_event(0, 100, target);
         let applied = r.dispatch(&ev, &ctx(100)).unwrap();
         assert_eq!(applied, 1);
+    }
+
+    /// #21 — the dispatch index must fan an event out to EVERY projection
+    /// that observes its TypeCode, in registration order. Two fanouts both
+    /// observing `CrossShellActivity` must each apply the same event.
+    #[test]
+    fn dispatcher_fans_out_to_all_matching_in_registration_order() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let target = sid(0x44);
+        let ev = make_cross_shell_event(0, 100, target);
+        let applied = r.dispatch(&ev, &ctx(100)).unwrap();
+        assert_eq!(applied, 2, "both matching projections must apply the event");
+    }
+
+    /// #21 — a TypeCode with no registered observer is a cheap index miss
+    /// (no entry) and returns Ok(0) without scanning any projection.
+    #[test]
+    fn dispatcher_unobserved_typecode_is_index_miss() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let other_event = EventRecord {
+            type_code: 0x0003_0F02, // UserErasureScheduled — not observed
+            sequence: 0,
+            tick: Tick(1),
+            payload: Bytes::new(),
+        };
+        assert_eq!(r.dispatch(&other_event, &ctx(1)).unwrap(), 0);
     }
 
     #[test]

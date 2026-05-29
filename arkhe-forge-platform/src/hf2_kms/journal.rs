@@ -91,10 +91,17 @@ pub struct JournalEntry {
 
 impl JournalEntry {
     /// Re-compute `entry_hash` from `prev_hash` + `token` canonical bytes.
+    ///
+    /// The hashed payload is the fixed 80-byte layout `prev_hash (32) ||
+    /// token_hash (32) || operator_fingerprint (8) || consumed_at_tick_be (8)`
+    /// — byte-identical to `prev_hash || token.canonical_bytes()`, assembled on
+    /// the stack to avoid two heap allocations per hash.
     pub fn compute_entry_hash(prev_hash: &[u8; 32], token: &ConsumedToken) -> [u8; 32] {
-        let mut payload = Vec::with_capacity(32 + 48);
-        payload.extend_from_slice(prev_hash);
-        payload.extend_from_slice(&token.canonical_bytes());
+        let mut payload = [0u8; 80];
+        payload[0..32].copy_from_slice(prev_hash);
+        payload[32..64].copy_from_slice(&token.token_hash);
+        payload[64..72].copy_from_slice(&token.operator_fingerprint);
+        payload[72..80].copy_from_slice(&token.consumed_at_tick.to_be_bytes());
         derive_key(JOURNAL_CHAIN_DOMAIN, &payload)
     }
 }
@@ -248,9 +255,14 @@ pub trait WalBackedJournal: PersistentJournal {
 }
 
 /// Dev-only in-memory chain-signed journal.
+///
+/// `entries` is the ordered chain (walked by `verify_chain` / `tip_hash`);
+/// `seen` is a parallel `token_hash` set so `is_duplicate` (and therefore
+/// `append`'s replay guard) runs in O(1) instead of an O(n) scan per append.
 #[derive(Debug, Default)]
 pub struct InMemoryJournal {
     entries: Vec<JournalEntry>,
+    seen: std::collections::HashSet<[u8; 32]>,
 }
 
 impl InMemoryJournal {
@@ -327,6 +339,7 @@ impl PersistentJournal for InMemoryJournal {
             signature,
             signer_pubkey: signer.public_key(),
         };
+        self.seen.insert(entry.token.token_hash);
         self.entries.push(entry.clone());
         Ok(entry)
     }
@@ -364,9 +377,7 @@ impl PersistentJournal for InMemoryJournal {
     }
 
     fn is_duplicate(&self, token_hash: &[u8; 32]) -> bool {
-        self.entries
-            .iter()
-            .any(|e| &e.token.token_hash == token_hash)
+        self.seen.contains(token_hash)
     }
 }
 
@@ -485,6 +496,56 @@ mod tests {
         )
         .unwrap();
         assert!(j.is_duplicate(&hash));
+    }
+
+    /// #10 — the stack-buffer `compute_entry_hash` must be byte-identical to
+    /// the original `prev_hash || token.canonical_bytes()` payload hash. We
+    /// rebuild that payload independently here (the pre-optimization code path)
+    /// and assert equality, guarding the chain hash against a layout change.
+    #[test]
+    fn compute_entry_hash_matches_canonical_payload() {
+        let prev_hash = [0xABu8; 32];
+        let token = ConsumedToken {
+            token_hash: [0x11u8; 32],
+            operator_fingerprint: [0x22u8; 8],
+            consumed_at_tick: 0x3344_5566_7788_99AA,
+        };
+
+        // Independent reference: concat prev_hash with canonical_bytes() — the
+        // exact two-Vec payload the optimized stack buffer replaces.
+        let mut reference = Vec::new();
+        reference.extend_from_slice(&prev_hash);
+        reference.extend_from_slice(&token.canonical_bytes());
+        let expected = blake3::derive_key(JOURNAL_CHAIN_DOMAIN, &reference);
+
+        let got = JournalEntry::compute_entry_hash(&prev_hash, &token);
+        assert_eq!(
+            got, expected,
+            "stack-buffer hash must match canonical payload"
+        );
+    }
+
+    /// #25 — the O(1) dedup set must stay in lock-step with the chain: every
+    /// appended token_hash is reported duplicate, an absent one is not, and the
+    /// set size tracks the entry count.
+    #[test]
+    fn dedup_set_tracks_chain() {
+        let mut j = InMemoryJournal::new();
+        let signer = test_signer(0x21);
+        j.append(make_token(0xA1, 1), &signer).unwrap();
+        j.append(make_token(0xB2, 2), &signer).unwrap();
+        j.append(make_token(0xC3, 3), &signer).unwrap();
+        assert!(j.is_duplicate(&[0xA1; 32]));
+        assert!(j.is_duplicate(&[0xB2; 32]));
+        assert!(j.is_duplicate(&[0xC3; 32]));
+        assert!(!j.is_duplicate(&[0xD4; 32]));
+        assert_eq!(j.len(), 3);
+        // Re-appending any seen token is rejected and does not grow the chain.
+        assert_eq!(
+            j.append(make_token(0xB2, 99), &signer).unwrap_err(),
+            JournalError::DuplicateToken
+        );
+        assert_eq!(j.len(), 3);
     }
 
     #[test]

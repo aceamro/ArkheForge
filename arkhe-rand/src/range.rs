@@ -171,10 +171,16 @@ impl RandInt for usize {
 ///
 /// # Panics
 ///
-/// Debug builds panic on empty range (`start >= end`). Release builds
-/// elide the assert (std `Range` API symmetry).
+/// Debug builds panic on empty range (`start >= end`). Release builds elide
+/// the assert (std `Range` API symmetry) and short-circuit to `start` WITHOUT
+/// consuming RNG bytes — `size == 0` would otherwise hit the `n == 0`
+/// full-range sentinel in the underlying Lemire and return a uniform draw
+/// over the whole type, which is incorrect for an empty range.
 pub fn gen_range<T: RandInt>(rng: &mut RngSource, range: Range<T>) -> T {
     debug_assert!(range.start < range.end, "gen_range: empty range");
+    if range.start >= range.end {
+        return range.start;
+    }
     let size = range.end.sub(range.start);
     range.start.add(T::lemire_bounded(rng, size))
 }
@@ -332,5 +338,44 @@ mod tests {
             let v = gen_range_inclusive(&mut r, 1u8..=6u8);
             assert!((1..=6).contains(&v));
         }
+    }
+
+    /// #24 (release) — an empty exclusive range (`start == end`) must
+    /// short-circuit to `start` WITHOUT consuming RNG bytes. We prove the
+    /// no-consume property by comparing the byte stream of an RNG that ran
+    /// the empty `gen_range` against an identically-seeded one that did not:
+    /// if any bytes were drawn the streams would diverge. In debug the
+    /// `debug_assert!` panics first (covered by the `#[should_panic]` test
+    /// below), so this path is release-only.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn empty_exclusive_range_short_circuits_without_consuming_rng() {
+        let mut used = rng();
+        let mut untouched = rng();
+
+        // Degenerate range: start == end. Must return start, draw nothing.
+        let v = gen_range(&mut used, 7u32..7u32);
+        assert_eq!(v, 7u32, "empty range must return start");
+
+        // Both RNGs must still emit identical bytes — no draw happened.
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        used.fill_bytes(&mut a);
+        untouched.fill_bytes(&mut b);
+        assert_eq!(a, b, "empty range must not consume RNG bytes");
+
+        // Works for u64 too (other Lemire width).
+        let mut r = rng();
+        assert_eq!(gen_range(&mut r, 9u64..9u64), 9u64);
+    }
+
+    /// #24 (debug) — the same degenerate empty range trips the documented
+    /// debug-only `debug_assert!`. Release elides it (covered above).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "empty range")]
+    fn empty_exclusive_range_panics_in_debug() {
+        let mut r = rng();
+        let _ = gen_range(&mut r, 7u32..7u32);
     }
 }
