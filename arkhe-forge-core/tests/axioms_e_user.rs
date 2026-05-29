@@ -17,7 +17,7 @@ use arkhe_forge_core::brand::ShellId;
 use arkhe_forge_core::component::{ArkheComponent, BoundedString};
 use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::event::{ArkheEvent, UserErasureScheduled};
-use arkhe_forge_core::space::{CreateSpace, SpaceConfig, SpaceKind, Visibility};
+use arkhe_forge_core::space::{CreateSpace, SpaceConfigDraft, SpaceKind, Visibility};
 use arkhe_forge_core::user::{
     AuthCredential, AuthKind, GdprEraseUser, GdprStatus, KdfKind, KdfParams, RegisterUser, UserId,
     UserProfile,
@@ -170,17 +170,20 @@ fn e_user_3_c3_erasing_actor_compute_rejects() {
     )
     .expect("stage UserProfile");
 
+    // Inject the actor whose backing user is ErasurePending — the erasure
+    // gate runs on the injected acting actor (single source of truth).
+    let mut c = c.with_actor(Some(actor));
+
     let staged_ops = c.ops().len();
 
     let action = CreateSpace {
         schema_version: 1,
-        config: SpaceConfig {
+        config: SpaceConfigDraft {
             schema_version: 1,
             shell_id: ShellId([0xC3; 16]),
             slug: BoundedString::<32>::new("forbidden").unwrap(),
             kind: SpaceKind::Flat,
             visibility: Visibility::Public,
-            creator: actor,
             parent_space: None,
             created_tick: Tick(100),
         },

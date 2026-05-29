@@ -14,7 +14,7 @@ use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::action::{ActionCompute, GdprGuard};
+use crate::action::ActionCompute;
 use crate::actor::ActorId;
 use crate::brand::{ShellBrand, ShellId};
 use crate::context::{ActionContext, ActionError};
@@ -295,27 +295,89 @@ impl<'s> Activity<'s> {
     }
 }
 
+/// Wire-format Activity details MINUS the acting actor. The acting actor is
+/// NOT a wire field: the runtime injects the authenticated identity at the
+/// dispatch boundary, and [`SubmitActivity::compute`] stamps it into the
+/// stored [`ActivityRecord`]. This is the structural close of the
+/// actor-substitution surface — there is no client-supplied `actor` to spoof.
+///
+/// The Activity's TARGET (which may reference another actor) stays here: a
+/// target is legitimate data, not the ACTING identity.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ActivityDraft {
+    /// Wire-level schema version tag.
+    pub schema_version: u16,
+    /// Shell identity — double-checked on replay vs `ActorProfile.shell_id`.
+    pub shell_id: ShellId,
+    /// Verb code.
+    pub verb: VerbCode,
+    /// Target descriptor.
+    pub target: TargetKind,
+    /// Emission tick.
+    pub at_tick: Tick,
+    /// Lifecycle status.
+    pub status: ActivityStatus,
+    /// Shell-defined opaque payload. Runtime does not interpret — schema
+    /// change implies a new `VerbCode` (E-act-3).
+    pub extra_bytes: Bytes,
+}
+
+impl ActivityDraft {
+    /// Promote a draft to a stored [`ActivityRecord`] by stamping the
+    /// authenticated acting `actor` — the single source of truth injected by
+    /// the runtime, never a wire field.
+    #[must_use]
+    fn into_record(self, actor: ActorId) -> ActivityRecord {
+        ActivityRecord {
+            schema_version: self.schema_version,
+            shell_id: self.shell_id,
+            actor,
+            verb: self.verb,
+            target: self.target,
+            at_tick: self.at_tick,
+            status: self.status,
+            extra_bytes: self.extra_bytes,
+        }
+    }
+}
+
 /// Submit an Activity to the runtime. Brand-less wire format — the branded
 /// `Activity<'s>` is unwrapped at submit-site via [`SubmitActivity::from_branded`].
+///
+/// The payload carries no acting actor: the recorded author is the
+/// authenticated identity the runtime injects via
+/// [`ActionContext::acting_actor`](crate::context::ActionContext::acting_actor),
+/// so it cannot be substituted.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheAction)]
 #[arkhe(type_code = 0x0001_0401, schema_version = 1, band = 1, idempotent)]
 pub struct SubmitActivity {
     /// Wire-level schema version tag.
     pub schema_version: u16,
-    /// Record payload.
-    pub record: ActivityRecord,
+    /// Activity details minus the acting actor (injected at dispatch).
+    pub draft: ActivityDraft,
     /// Opt-in idempotency key. `None` = non-idempotent.
     pub idempotency_key: Option<[u8; 16]>,
 }
 
 impl SubmitActivity {
-    /// Convert a branded `Activity<'s>` to a brand-less submit payload.
+    /// Convert a branded `Activity<'s>` to a brand-less submit payload. The
+    /// branded record's `actor` is dropped — the acting identity is injected
+    /// by the runtime at dispatch, not carried from the submit site.
     #[inline]
     #[must_use]
     pub fn from_branded(a: Activity<'_>) -> Self {
+        let r = a.inner;
         Self {
             schema_version: 1,
-            record: a.inner,
+            draft: ActivityDraft {
+                schema_version: r.schema_version,
+                shell_id: r.shell_id,
+                verb: r.verb,
+                target: r.target,
+                at_tick: r.at_tick,
+                status: r.status,
+                extra_bytes: r.extra_bytes,
+            },
             idempotency_key: None,
         }
     }
@@ -343,10 +405,17 @@ pub struct RetractActivity {
 impl ActionCompute for SubmitActivity {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Single source of truth: the acting actor is the authenticated
+        // identity the runtime injected at dispatch — never a wire field.
+        // A user-scoped action with no injected actor cannot proceed.
+        let actor = ctx.acting_actor().ok_or(ActionError::AuthorizationFailed(
+            "activity requires an authenticated actor",
+        ))?;
+
         // E-user-3 C3 MC — refuse if the actor's backing user is in
         // `GdprStatus::ErasurePending`. Cascade owns the only legal write
         // path until completion (C3 contract).
-        ctx.ensure_actor_eligible(self.record.actor, ctx.tick())?;
+        ctx.ensure_actor_eligible(actor, ctx.tick())?;
 
         if let Some(key) = self.idempotency_key {
             if ctx.idempotency_lookup(&key).is_some() {
@@ -359,21 +428,18 @@ impl ActionCompute for SubmitActivity {
         // will produce; if the activity targets itself we refuse before
         // any `Op` is pushed to the buffer (E-act-5 invariant).
         let predicted = ctx.preview_next_id_for::<ActivityRecord>()?;
-        if let TargetKind::Activity(target) = &self.record.target {
+        if let TargetKind::Activity(target) = &self.draft.target {
             if target.get() == predicted {
                 return Err(ActionError::InvalidInput("activity self-loop"));
             }
         }
 
+        // Stamp the injected actor into the stored record (authenticated
+        // author), then spawn + attach.
+        let record = self.draft.clone().into_record(actor);
         let activity_entity = ctx.spawn_entity_for::<ActivityRecord>()?;
-        ctx.set_component(activity_entity, &self.record)?;
+        ctx.set_component(activity_entity, &record)?;
         Ok(())
-    }
-}
-
-impl GdprGuard for SubmitActivity {
-    fn gdpr_actor(&self) -> Option<ActorId> {
-        Some(self.record.actor)
     }
 }
 
@@ -386,10 +452,6 @@ impl ActionCompute for RetractActivity {
         Ok(())
     }
 }
-
-// Retract carries no fresh actor-originated write — the tombstone targets an
-// existing record, so it does not gate on backing-user erasure. Default (None).
-impl GdprGuard for RetractActivity {}
 
 /// Hard cap on meta-verb depth — the runtime WAL bound on
 /// `manifest.moderation.appeal_max_depth` (E-act-5). Shell manifest values must
@@ -446,7 +508,10 @@ mod tests {
     }
 
     #[test]
-    fn submit_activity_preserves_record_on_branded_unwrap() {
+    fn submit_activity_drops_actor_on_branded_unwrap() {
+        // The branded record carries an `actor`, but `from_branded` produces a
+        // draft with NO actor field — the acting identity is injected at
+        // dispatch, not carried from the submit site.
         ShellBrand::run(|brand| {
             let rec = ActivityRecord {
                 schema_version: 1,
@@ -460,17 +525,19 @@ mod tests {
             };
             let activity = Activity::new(brand, rec.clone());
             let submit = SubmitActivity::from_branded(activity);
-            assert_eq!(submit.record, rec);
+            // Everything but the acting actor is preserved into the draft.
+            assert_eq!(submit.draft.shell_id, rec.shell_id);
+            assert_eq!(submit.draft.verb, rec.verb);
+            assert_eq!(submit.draft.target, rec.target);
             assert!(submit.idempotency_key.is_none());
         });
     }
 
     #[test]
     fn submit_activity_with_idempotency_key_attaches() {
-        let rec = ActivityRecord {
+        let draft = ActivityDraft {
             schema_version: 1,
             shell_id: ShellId([0u8; 16]),
-            actor: ActorId::new(ent(1)),
             verb: VerbCode::canonical(canonical_verbs::LIKE),
             target: TargetKind::Entry(EntryId::new(ent(2))),
             at_tick: Tick(0),
@@ -479,11 +546,86 @@ mod tests {
         };
         let submit = SubmitActivity {
             schema_version: 1,
-            record: rec,
+            draft,
             idempotency_key: None,
         }
         .with_idempotency_key([0xCD; 16]);
         assert_eq!(submit.idempotency_key, Some([0xCD; 16]));
+    }
+
+    #[test]
+    fn submit_activity_records_injected_actor_not_a_wire_field() {
+        use crate::context::ActionContext;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let injected = ActorId::new(ent(0xAC));
+        let submit = SubmitActivity {
+            schema_version: 1,
+            draft: ActivityDraft {
+                schema_version: 1,
+                shell_id: ShellId([0u8; 16]),
+                verb: VerbCode::canonical(canonical_verbs::LIKE),
+                target: TargetKind::Entry(EntryId::new(ent(2))),
+                at_tick: Tick(0),
+                status: ActivityStatus::Active,
+                extra_bytes: Bytes::new(),
+            },
+            idempotency_key: None,
+        };
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+        .with_actor(Some(injected));
+        submit.compute(&mut c).expect("injected actor → compute ok");
+        let recorded = c.ops().iter().find_map(|op| match op {
+            arkhe_kernel::state::Op::SetComponent {
+                type_code, bytes, ..
+            } if *type_code == TypeCode(ActivityRecord::TYPE_CODE) => {
+                postcard::from_bytes::<ActivityRecord>(bytes).ok()
+            }
+            _ => None,
+        });
+        assert_eq!(
+            recorded.expect("record present").actor,
+            injected,
+            "recorded author must equal the injected acting actor",
+        );
+    }
+
+    #[test]
+    fn submit_activity_without_injected_actor_rejects() {
+        use crate::context::ActionContext;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let submit = SubmitActivity {
+            schema_version: 1,
+            draft: ActivityDraft {
+                schema_version: 1,
+                shell_id: ShellId([0u8; 16]),
+                verb: VerbCode::canonical(canonical_verbs::LIKE),
+                target: TargetKind::Entry(EntryId::new(ent(2))),
+                at_tick: Tick(0),
+                status: ActivityStatus::Active,
+                extra_bytes: Bytes::new(),
+            },
+            idempotency_key: None,
+        };
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        );
+        let err = submit
+            .compute(&mut c)
+            .expect_err("no injected actor must reject");
+        assert!(matches!(err, ActionError::AuthorizationFailed(_)));
+        assert!(c.ops().is_empty(), "no Ops on rejection");
     }
 
     #[test]

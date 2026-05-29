@@ -16,8 +16,8 @@
 
 use arkhe_forge_core::action::ActionCompute;
 use arkhe_forge_core::activity::{
-    canonical_verbs, Activity, ActivityId, ActivityRecord, ActivityStatus, EntityShellId,
-    RetractActivity, ShellVerb, SubmitActivity, TargetKey, TargetKind, VerbCode,
+    canonical_verbs, Activity, ActivityDraft, ActivityId, ActivityRecord, ActivityStatus,
+    EntityShellId, RetractActivity, ShellVerb, SubmitActivity, TargetKey, TargetKind, VerbCode,
     APPEAL_MAX_DEPTH_CAP,
 };
 use arkhe_forge_core::actor::ActorId;
@@ -53,6 +53,24 @@ fn base_record() -> ActivityRecord {
         status: ActivityStatus::Active,
         extra_bytes: Bytes::new(),
     }
+}
+
+/// Submit-payload details minus the acting actor (injected at dispatch).
+fn base_draft() -> ActivityDraft {
+    ActivityDraft {
+        schema_version: 1,
+        shell_id: ShellId([0u8; 16]),
+        verb: VerbCode::canonical(canonical_verbs::LIKE),
+        target: TargetKind::Entry(EntryId::new(eid(2))),
+        at_tick: Tick(5),
+        status: ActivityStatus::Active,
+        extra_bytes: Bytes::new(),
+    }
+}
+
+/// A compute context with an injected authenticated acting actor.
+fn actor_ctx() -> ActionContext<'static> {
+    ctx().with_actor(Some(ActorId::new(eid(1))))
 }
 
 /// **E-act-1 (MC / C2)** — at most one Active `(actor, verb, target.key())`
@@ -171,12 +189,12 @@ fn e_act_7_entity_shell_id_component_pinned() {
 fn submit_activity_compute_smoke() {
     let act = SubmitActivity {
         schema_version: 1,
-        record: base_record(),
+        draft: base_draft(),
         idempotency_key: None,
     };
-    let mut c = ctx();
+    let mut c = actor_ctx();
     act.compute(&mut c)
-        .expect("skeleton compute should accept valid record");
+        .expect("compute should accept a valid draft with an injected actor");
 }
 
 /// **Action-path smoke** — retract compute is a no-op skeleton; a future
@@ -209,17 +227,18 @@ fn e_act_5_self_loop_compute_rejects() {
         Tick(7),
         Principal::System,
         CapabilityMask::SYSTEM,
-    );
+    )
+    .with_actor(Some(ActorId::new(eid(1))));
     // Predict the id the next spawn will produce, then submit an Activity
     // that targets itself.
     let predicted = c.preview_next_id_for::<ActivityRecord>().unwrap();
-    let rec = ActivityRecord {
+    let draft = ActivityDraft {
         target: TargetKind::Activity(ActivityId::new(predicted)),
-        ..base_record()
+        ..base_draft()
     };
     let act = SubmitActivity {
         schema_version: 1,
-        record: rec,
+        draft,
         idempotency_key: None,
     };
     let err = act.compute(&mut c).unwrap_err();

@@ -327,7 +327,7 @@ fn compose_service_with_replay(
 
     let mut next_tick: u64 = 1;
     for entry in prior {
-        // `RecordDiceRoll` is not user-scoped (default `GdprGuard`), so the
+        // `RecordDiceRoll` is system-scoped (never reads acting_actor), so the
         // caller is the system replay path — no authenticated actor.
         svc.dispatch(
             instance,

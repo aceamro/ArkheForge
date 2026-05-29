@@ -8,7 +8,7 @@
 use arkhe_kernel::abi::{EntityId, Tick};
 use serde::{Deserialize, Serialize};
 
-use crate::action::{ActionCompute, GdprGuard};
+use crate::action::ActionCompute;
 use crate::context::{ActionContext, ActionError};
 use crate::event::UserErasureScheduled;
 use crate::ArkheAction;
@@ -215,13 +215,6 @@ impl ActionCompute for GdprEraseUser {
         Ok(())
     }
 }
-
-// `RegisterUser` creates a new user — there is no prior backing user to gate.
-impl GdprGuard for RegisterUser {}
-
-// `GdprEraseUser` is the cascade trigger itself; gating it on
-// `ErasurePending` would deadlock the only legal write path (C3). Default.
-impl GdprGuard for GdprEraseUser {}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use serde::{Deserialize, Serialize};
 
-use crate::action::{ActionCompute, GdprGuard};
+use crate::action::ActionCompute;
 use crate::actor::ActorId;
 use crate::brand::ShellId;
 use crate::component::BoundedString;
@@ -126,23 +126,77 @@ pub struct SpaceMembership {
     pub members: BTreeSet<ActorId>,
 }
 
+/// Wire-format Space configuration MINUS the creating actor. The creator is
+/// NOT a wire field: the runtime injects the authenticated identity at the
+/// dispatch boundary, and [`CreateSpace::compute`] stamps it into the stored
+/// [`SpaceConfig`]. This is the structural close of the actor-substitution
+/// surface — there is no client-supplied `creator` to spoof.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SpaceConfigDraft {
+    /// Wire-level schema version tag.
+    pub schema_version: u16,
+    /// Shell identity — immutable.
+    pub shell_id: ShellId,
+    /// URL-safe slug — unique within shell.
+    pub slug: BoundedString<32>,
+    /// Structural kind.
+    pub kind: SpaceKind,
+    /// Visibility policy.
+    pub visibility: Visibility,
+    /// Parent Space in the DAG. Immutable after creation (E-space-7 / P5).
+    pub parent_space: Option<SpaceId>,
+    /// Creation tick.
+    pub created_tick: Tick,
+}
+
+impl SpaceConfigDraft {
+    /// Promote a draft to a stored [`SpaceConfig`] by stamping the
+    /// authenticated `creator` — the single source of truth injected by the
+    /// runtime, never a wire field.
+    #[must_use]
+    fn into_config(self, creator: ActorId) -> SpaceConfig {
+        SpaceConfig {
+            schema_version: self.schema_version,
+            shell_id: self.shell_id,
+            slug: self.slug,
+            kind: self.kind,
+            visibility: self.visibility,
+            creator,
+            parent_space: self.parent_space,
+            created_tick: self.created_tick,
+        }
+    }
+}
+
 /// Spawn a fresh Space under `config`.
+///
+/// The payload carries no creating actor: the recorded creator is the
+/// authenticated identity the runtime injects via
+/// [`ActionContext::acting_actor`](crate::context::ActionContext::acting_actor),
+/// so it cannot be substituted.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheAction)]
 #[arkhe(type_code = 0x0001_0201, schema_version = 1, band = 1)]
 pub struct CreateSpace {
     /// Wire-level schema version tag.
     pub schema_version: u16,
-    /// Initial configuration.
-    pub config: SpaceConfig,
+    /// Initial configuration minus the creating actor (injected at dispatch).
+    pub config: SpaceConfigDraft,
 }
 
 impl ActionCompute for CreateSpace {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Single source of truth: the creating actor is the authenticated
+        // identity the runtime injected at dispatch — never a wire field.
+        // A user-scoped action with no injected actor cannot proceed.
+        let creator = ctx.acting_actor().ok_or(ActionError::AuthorizationFailed(
+            "space requires an authenticated actor",
+        ))?;
+
         // E-user-3 C3 MC — refuse Action when the creator's backing user is
         // already in `GdprStatus::ErasurePending`. The cascade owns the only
         // legal write path until completion.
-        ctx.ensure_actor_eligible(self.config.creator, ctx.tick())?;
+        ctx.ensure_actor_eligible(creator, ctx.tick())?;
 
         // E-space-4 MC — parent chain depth check. A parent reference that
         // would push the child past `MAX_SPACE_DEPTH` is rejected; a None
@@ -162,8 +216,11 @@ impl ActionCompute for CreateSpace {
             None => 0,
         };
 
+        // Stamp the injected creator into the stored config (authenticated
+        // creator), then spawn + attach.
+        let config = self.config.clone().into_config(creator);
         let space_entity = ctx.spawn_entity_for::<SpaceConfig>()?;
-        ctx.set_component(space_entity, &self.config)?;
+        ctx.set_component(space_entity, &config)?;
         ctx.set_component(
             space_entity,
             &ParentChainDepth {
@@ -172,12 +229,6 @@ impl ActionCompute for CreateSpace {
             },
         )?;
         Ok(())
-    }
-}
-
-impl GdprGuard for CreateSpace {
-    fn gdpr_actor(&self) -> Option<ActorId> {
-        Some(self.config.creator)
     }
 }
 
@@ -248,5 +299,74 @@ mod tests {
     #[test]
     fn max_space_depth_is_sixty_four() {
         assert_eq!(MAX_SPACE_DEPTH, 64);
+    }
+
+    fn draft() -> SpaceConfigDraft {
+        SpaceConfigDraft {
+            schema_version: 1,
+            shell_id: ShellId([0x01; 16]),
+            slug: BoundedString::<32>::new("general").unwrap(),
+            kind: SpaceKind::Flat,
+            visibility: Visibility::Public,
+            parent_space: None,
+            created_tick: Tick(0),
+        }
+    }
+
+    #[test]
+    fn create_space_records_injected_creator_not_a_wire_field() {
+        use crate::action::ActionCompute;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let injected = ActorId::new(ent(0xC1));
+        let act = CreateSpace {
+            schema_version: 1,
+            config: draft(),
+        };
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+        .with_actor(Some(injected));
+        act.compute(&mut c).expect("injected creator → compute ok");
+        let recorded = c.ops().iter().find_map(|op| match op {
+            arkhe_kernel::state::Op::SetComponent {
+                type_code, bytes, ..
+            } if *type_code == TypeCode(SpaceConfig::TYPE_CODE) => {
+                postcard::from_bytes::<SpaceConfig>(bytes).ok()
+            }
+            _ => None,
+        });
+        assert_eq!(
+            recorded.expect("config present").creator,
+            injected,
+            "recorded creator must equal the injected acting actor",
+        );
+    }
+
+    #[test]
+    fn create_space_without_injected_actor_rejects() {
+        use crate::action::ActionCompute;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let act = CreateSpace {
+            schema_version: 1,
+            config: draft(),
+        };
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        );
+        let err = act
+            .compute(&mut c)
+            .expect_err("no injected actor must reject");
+        assert!(matches!(err, ActionError::AuthorizationFailed(_)));
+        assert!(c.ops().is_empty(), "no Ops on rejection");
     }
 }

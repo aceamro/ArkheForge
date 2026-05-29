@@ -36,7 +36,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use arkhe_forge_core::action::{ActionCompute, GdprGuard};
+use arkhe_forge_core::action::ActionCompute;
 use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::{arkhe_pure, ArkheAction, ArkheEvent};
 
@@ -212,7 +212,3 @@ impl ActionCompute for RecordHandShowdown {
         Ok(())
     }
 }
-
-// Not user-scoped — the showdown record is system-originated, so the L2
-// GDPR admission gate does not apply. Default (None).
-impl GdprGuard for RecordHandShowdown {}

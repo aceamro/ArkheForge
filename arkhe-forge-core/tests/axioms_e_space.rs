@@ -18,8 +18,8 @@ use arkhe_forge_core::actor::ActorId;
 use arkhe_forge_core::brand::ShellId;
 use arkhe_forge_core::component::{ArkheComponent, BoundedString};
 use arkhe_forge_core::space::{
-    CreateSpace, ParentChainDepth, SpaceConfig, SpaceId, SpaceKind, SpaceMembership, Visibility,
-    MAX_SPACE_DEPTH,
+    CreateSpace, ParentChainDepth, SpaceConfig, SpaceConfigDraft, SpaceId, SpaceKind,
+    SpaceMembership, Visibility, MAX_SPACE_DEPTH,
 };
 use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 
@@ -35,6 +35,19 @@ fn base_config(shell: ShellId, slug: &str) -> SpaceConfig {
         kind: SpaceKind::Flat,
         visibility: Visibility::Public,
         creator: ActorId::new(eid(1)),
+        parent_space: None,
+        created_tick: Tick(0),
+    }
+}
+
+/// Submit-payload config minus the creating actor (injected at dispatch).
+fn base_draft(shell: ShellId, slug: &str) -> SpaceConfigDraft {
+    SpaceConfigDraft {
+        schema_version: 1,
+        shell_id: shell,
+        slug: BoundedString::<32>::new(slug).unwrap(),
+        kind: SpaceKind::Flat,
+        visibility: Visibility::Public,
         parent_space: None,
         created_tick: Tick(0),
     }
@@ -112,13 +125,13 @@ fn e_space_6_extension_kind_requires_type_code() {
 #[test]
 fn e_space_7_parent_is_optional_and_pinned() {
     let shell = ShellId([0x01; 16]);
-    let cfg = base_config(shell, "root");
-    assert!(cfg.parent_space.is_none());
-    // The `CreateSpace` action wraps this config; re-encoding verifies the
+    let draft = base_draft(shell, "root");
+    assert!(draft.parent_space.is_none());
+    // The `CreateSpace` action wraps this draft; re-encoding verifies the
     // wire contract is stable (no order change allowed).
     let act = CreateSpace {
         schema_version: 1,
-        config: cfg.clone(),
+        config: draft.clone(),
     };
     let bytes = postcard::to_stdvec(&act).unwrap();
     let back: CreateSpace = postcard::from_bytes(&bytes).unwrap();
@@ -144,20 +157,23 @@ fn e_space_4_compute_rejects_missing_parent_view() {
     use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
 
     let shell = ShellId([0x01; 16]);
-    let mut cfg = base_config(shell, "child");
-    cfg.parent_space = Some(SpaceId::new(eid(99)));
+    let mut draft = base_draft(shell, "child");
+    draft.parent_space = Some(SpaceId::new(eid(99)));
     let act = CreateSpace {
         schema_version: 1,
-        config: cfg,
+        config: draft,
     };
 
+    // Inject an authenticated actor so compute passes the acting-actor gate
+    // and reaches the parent-depth resolution under test.
     let mut ctx = ActionContext::new(
         [0x11u8; 32],
         InstanceId::new(1).unwrap(),
         Tick(1),
         Principal::System,
         CapabilityMask::SYSTEM,
-    );
+    )
+    .with_actor(Some(ActorId::new(eid(1))));
     let err = act.compute(&mut ctx).unwrap_err();
     assert!(matches!(err, ActionError::InvalidInput(_)));
 }

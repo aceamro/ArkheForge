@@ -274,8 +274,8 @@ fn main() {
             &action,
             Tick(1),
             CapabilityMask::SYSTEM,
-            // `RecordHandShowdown` is not user-scoped (default `GdprGuard`),
-            // so the system caller passes no authenticated actor.
+            // `RecordHandShowdown` is system-scoped (it never reads
+            // `ctx.acting_actor`), so the system caller injects no actor.
             None,
         )
         .expect("dispatch must succeed");

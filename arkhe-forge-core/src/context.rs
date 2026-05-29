@@ -184,6 +184,7 @@ pub struct ActionContext<'i> {
     tick: Tick,
     principal: Principal,
     caps: CapabilityMask,
+    acting_actor: Option<ActorId>,
     id_seq: u32,
     event_seq: u64,
     events: Vec<EventRecord>,
@@ -212,6 +213,7 @@ impl<'i> ActionContext<'i> {
             tick,
             principal,
             caps,
+            acting_actor: None,
             id_seq: 0,
             event_seq: 0,
             events: Vec::new(),
@@ -221,6 +223,34 @@ impl<'i> ActionContext<'i> {
             actor_handle_index: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Inject the authenticated acting actor — the single source of truth for
+    /// the identity on whose behalf this Action runs. The runtime threads the
+    /// caller's authenticated `ActorId` here at the dispatch boundary (via the
+    /// kernel `submit` actor channel + the [`crate::bridge`]); user-scoped
+    /// compute bodies read it through [`ActionContext::acting_actor`] instead
+    /// of trusting a wire-supplied field. `None` = system / unauthenticated.
+    #[inline]
+    #[must_use]
+    pub fn with_actor(mut self, actor: Option<ActorId>) -> Self {
+        self.acting_actor = actor;
+        self
+    }
+
+    /// The authenticated acting actor injected at the dispatch boundary.
+    ///
+    /// This is the identity the caller's auth layer verified, threaded through
+    /// the kernel `submit` actor channel — NOT a wire-controlled payload
+    /// field. A user-scoped compute body uses this as both the eligibility
+    /// subject ([`ActionContext::ensure_actor_eligible`]) and the recorded
+    /// author/creator, so actor-substitution is structurally impossible.
+    /// `None` = no authenticated identity (system / unauthenticated caller);
+    /// a user-scoped action must reject in that case.
+    #[inline]
+    #[must_use]
+    pub fn acting_actor(&self) -> Option<ActorId> {
+        self.acting_actor
     }
 
     /// Attach an L0 `InstanceView` snapshot — enables
@@ -528,16 +558,16 @@ impl<'i> ActionContext<'i> {
     ///   `RuntimeService::dispatch` (forge-platform) run with a viewless
     ///   bridge context (see [`crate::bridge`]), so this in-compute call
     ///   soft-passes. For that path the gate is enforced at the L2
-    ///   admission boundary: `dispatch` first authenticates the action's
-    ///   [`GdprGuard::gdpr_actor`](crate::action::GdprGuard::gdpr_actor)
-    ///   against the caller identity the auth layer resolved (rejecting a
-    ///   wire actor-substitution), then binds the kernel `InstanceView`
-    ///   and runs this same check on the now-verified actor BEFORE
-    ///   `submit`, rejecting an erasure-pending action before it reaches
-    ///   the WAL. The actor this gate evaluates is therefore the
-    ///   authenticated caller, not a trusted-by-default wire field — the
-    ///   gate is sound. It is live for any user whose `UserProfile` a
-    ///   production path has transitioned to `ErasurePending`.
+    ///   admission boundary on the authenticated acting actor: `dispatch`
+    ///   injects the caller identity the auth layer resolved (it is the
+    ///   single source of truth — there is no wire actor field to
+    ///   substitute), binds the kernel `InstanceView`, and runs this same
+    ///   check on that injected actor BEFORE `submit`, rejecting an
+    ///   erasure-pending action before it reaches the WAL. The actor this
+    ///   gate evaluates is therefore the authenticated caller, never a
+    ///   trusted-by-default wire field — the gate is sound. It is live for
+    ///   any user whose `UserProfile` a production path has transitioned to
+    ///   `ErasurePending`.
     pub fn ensure_actor_eligible(
         &self,
         actor: ActorId,
