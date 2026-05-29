@@ -35,6 +35,8 @@ argon2              = { workspace = true, optional = true }
 chacha20poly1305    = { workspace = true, optional = true }
 aes-gcm             = { workspace = true, optional = true }
 aes-gcm-siv         = { workspace = true, optional = true }
+# Direct dep because the kernel PqcSigner/PqcVerifier are sealed + WAL-only; the "zeroize" feature is mandatory (SigningKey ZeroizeOnDrop is gated on it).
+ml-dsa              = { version = "=0.1.0", features = ["zeroize"], optional = true }
 # Key material lifecycle — always-on (used by the coordinator regardless of Tier).
 zeroize             = { workspace = true }
 # Shamir `t-of-n` secret sharing (`hf2_kms::threshold`) draws polynomial
@@ -69,6 +71,9 @@ tier-2-multi-kms = ["tier-1-kms", "aes-gcm", "aes-gcm-siv"]       # Tier-2 produ
 # own `tier-2-<vendor>-kms` flag so operators can select exactly the backends
 # they need. The `KmsBackend` trait + `MockKmsBackend` are always available.
 tier-2-aws-kms   = ["aws-sdk-kms", "aws-config", "tokio"]
+# L2 PQC audit-receipt signing + verification (ML-DSA-65 / Hybrid). Pulls the
+# direct `ml-dsa` dep; the verifier dispatcher + Ed25519 arm compile without it.
+tier-2-pqc-receipts = ["ml-dsa"]
 
 # Platform FFI for `process_protection`.
 # Linux + macOS share the libc surface (mlockall / prctl / setrlimit / ptrace);
