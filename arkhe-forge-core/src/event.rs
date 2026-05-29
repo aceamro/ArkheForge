@@ -104,6 +104,25 @@ pub enum RuntimeSignatureClass {
     Hybrid = 3,
 }
 
+impl RuntimeSignatureClass {
+    /// Parse the manifest `audit.signature_class` token.
+    ///
+    /// Canonical tokens: `"none"`, `"ed25519"`, `"ml-dsa-65"`,
+    /// `"hybrid"`. Any other string yields `None` so the manifest
+    /// validator can reject an unknown class with a typed error rather
+    /// than silently defaulting.
+    #[must_use]
+    pub fn from_manifest_str(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Self::None),
+            "ed25519" => Some(Self::Ed25519),
+            "ml-dsa-65" => Some(Self::MlDsa65),
+            "hybrid" => Some(Self::Hybrid),
+            _ => None,
+        }
+    }
+}
+
 /// Compliance tier classifier — crypto-erasure protection level
 /// Compliance tier indicator.
 #[non_exhaustive]
@@ -506,7 +525,7 @@ pub struct ReplicaIdAllocation {
 /// Cargo feature gating closes the compile.
 #[cfg(feature = "audit-receipt-key-identified")]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
-#[arkhe(type_code = 0x0003_0F0E, schema_version = 1)]
+#[arkhe(type_code = 0x0003_0F0E, schema_version = 2)]
 pub struct AuditReceiptKeyPolicy {
     /// Wire schema version.
     pub schema_version: u16,
@@ -554,6 +573,20 @@ pub struct AuditReceiptKeyPolicy {
     /// invariant lifted from convention to type). Recipient
     /// verification path is selected by [`Self::signer_policy`].
     pub attestation: Attestation,
+    /// Post-quantum half of the attestation envelope (schema v2).
+    ///
+    /// Coherence with [`Self::algorithm`]: this field MUST be `Some`
+    /// for the PQC-bearing classes (`MlDsa65`, `Hybrid`) and `None`
+    /// otherwise (`None`, `Ed25519`). For `MlDsa65` it carries the
+    /// 3309-byte ML-DSA-65 signature; for `Hybrid` the 3309-byte
+    /// ML-DSA-65 half (the Ed25519 half lives in [`Self::attestation`]).
+    /// The verifier (`arkhe-forge-platform` `verify_receipt_envelope`)
+    /// enforces this algorithm<->slot coherence before dispatching.
+    ///
+    /// Wire compatibility: postcard encodes `None` as a single trailing
+    /// `0x00`, so a schema-1 `None`/`Ed25519` receipt re-encodes
+    /// byte-identically under schema-2 when this field is left `None`.
+    pub attestation_pqc: Option<Vec<u8>>,
 }
 
 #[cfg(test)]
@@ -611,6 +644,28 @@ mod tests {
         assert_eq!(ReplicaIdAllocation::TYPE_CODE, 0x0003_0F0D);
         #[cfg(feature = "audit-receipt-key-identified")]
         assert_eq!(AuditReceiptKeyPolicy::TYPE_CODE, 0x0003_0F0E);
+    }
+
+    #[test]
+    fn from_manifest_str_parses_all() {
+        assert_eq!(
+            RuntimeSignatureClass::from_manifest_str("none"),
+            Some(RuntimeSignatureClass::None)
+        );
+        assert_eq!(
+            RuntimeSignatureClass::from_manifest_str("ed25519"),
+            Some(RuntimeSignatureClass::Ed25519)
+        );
+        assert_eq!(
+            RuntimeSignatureClass::from_manifest_str("ml-dsa-65"),
+            Some(RuntimeSignatureClass::MlDsa65)
+        );
+        assert_eq!(
+            RuntimeSignatureClass::from_manifest_str("hybrid"),
+            Some(RuntimeSignatureClass::Hybrid)
+        );
+        assert_eq!(RuntimeSignatureClass::from_manifest_str("ML-DSA-65"), None);
+        assert_eq!(RuntimeSignatureClass::from_manifest_str("dilithium"), None);
     }
 
     #[test]
@@ -683,7 +738,7 @@ mod tests {
     #[test]
     fn audit_receipt_key_policy_serde_roundtrip_with_genesis_entry() {
         let ev = AuditReceiptKeyPolicy {
-            schema_version: 1,
+            schema_version: 2,
             key_id: [0xABu8; 16],
             algorithm: RuntimeSignatureClass::Ed25519,
             public_key: Bytes::from_static(&[0u8; 32]),
@@ -692,6 +747,7 @@ mod tests {
             retirement_tick: None,
             signer_policy: AttestationSignerPolicy::SelfSigned,
             attestation: Attestation::from_bytes([0x77u8; 64]),
+            attestation_pqc: None,
         };
         let bytes = postcard::to_stdvec(&ev).unwrap();
         let back: AuditReceiptKeyPolicy = postcard::from_bytes(&bytes).unwrap();
@@ -702,7 +758,7 @@ mod tests {
     #[test]
     fn audit_receipt_key_policy_serde_roundtrip_with_rotation_entry() {
         let ev = AuditReceiptKeyPolicy {
-            schema_version: 1,
+            schema_version: 2,
             key_id: [0xCDu8; 16],
             algorithm: RuntimeSignatureClass::MlDsa65,
             public_key: Bytes::from_static(&[0xEEu8; 1952]), // ML-DSA-65 wire size
@@ -711,6 +767,7 @@ mod tests {
             retirement_tick: Some(Tick(1000)),
             signer_policy: AttestationSignerPolicy::Predecessor,
             attestation: Attestation::from_bytes([0x99u8; 64]),
+            attestation_pqc: Some(vec![0xEEu8; 3309]),
         };
         let bytes = postcard::to_stdvec(&ev).unwrap();
         let back: AuditReceiptKeyPolicy = postcard::from_bytes(&bytes).unwrap();
@@ -738,7 +795,7 @@ mod tests {
             0x56, 0x78,
         ];
         let ev = AuditReceiptKeyPolicy {
-            schema_version: 1,
+            schema_version: 2,
             key_id,
             algorithm: RuntimeSignatureClass::Ed25519,
             public_key: Bytes::from_static(&[0xC3u8; 32]),
@@ -747,6 +804,7 @@ mod tests {
             retirement_tick: Some(Tick(5_000)),
             signer_policy: AttestationSignerPolicy::OperatorRoot,
             attestation: Attestation::from_bytes([0x44u8; 64]),
+            attestation_pqc: None,
         };
         let bytes = postcard::to_stdvec(&ev).unwrap();
         let back: AuditReceiptKeyPolicy = postcard::from_bytes(&bytes).unwrap();
@@ -756,6 +814,78 @@ mod tests {
         // Explicit upper-half spot-check (catches truncation regression
         // even if compiler accepted [u8; 8] literal somehow).
         assert_eq!(back.key_id[8..16], key_id[8..16]);
+    }
+
+    /// Schema-1 vs schema-2 byte-identity for the `None` pqc slot.
+    ///
+    /// postcard has no struct framing — a struct encodes as the bare
+    /// concatenation of its fields, and `Option::None` is a single
+    /// trailing `0x00`. So a schema-2 receipt with `attestation_pqc:
+    /// None` encodes as the schema-1 field run (reproduced here as the
+    /// matching field tuple) followed by exactly one `0x00`. This is
+    /// the wire-compat guarantee: schema-1 `None`/`Ed25519` receipts
+    /// re-encode byte-identical under schema-2 modulo that one byte.
+    #[cfg(feature = "audit-receipt-key-identified")]
+    #[test]
+    fn audit_receipt_key_policy_none_pqc_appends_single_zero_byte() {
+        let ev = AuditReceiptKeyPolicy {
+            schema_version: 2,
+            key_id: [0xABu8; 16],
+            algorithm: RuntimeSignatureClass::Ed25519,
+            public_key: Bytes::from_static(&[0u8; 32]),
+            predecessor_key_id: None,
+            effective_tick: Tick(0),
+            retirement_tick: None,
+            signer_policy: AttestationSignerPolicy::SelfSigned,
+            attestation: Attestation::from_bytes([0x77u8; 64]),
+            attestation_pqc: None,
+        };
+        let full = postcard::to_stdvec(&ev).unwrap();
+
+        // The schema-1 field run = the same fields WITHOUT the pqc slot.
+        // postcard encodes a tuple as the concatenation of its elements,
+        // identical to a struct's field run, so this reproduces the
+        // pre-field byte layout.
+        let pre_field = postcard::to_stdvec(&(
+            ev.schema_version,
+            ev.key_id,
+            ev.algorithm,
+            ev.public_key.clone(),
+            ev.predecessor_key_id,
+            ev.effective_tick,
+            ev.retirement_tick,
+            ev.signer_policy,
+            ev.attestation.clone(),
+        ))
+        .unwrap();
+
+        // `None` appends exactly one trailing 0x00 to the pre-field run.
+        assert_eq!(full.len(), pre_field.len() + 1);
+        assert_eq!(&full[..pre_field.len()], pre_field.as_slice());
+        assert_eq!(full[full.len() - 1], 0x00);
+    }
+
+    /// PQC slot round-trip — a 3309-byte ML-DSA-65 signature in the
+    /// `attestation_pqc` slot survives a postcard round-trip intact.
+    #[cfg(feature = "audit-receipt-key-identified")]
+    #[test]
+    fn audit_receipt_key_policy_pqc_slot_round_trip() {
+        let ev = AuditReceiptKeyPolicy {
+            schema_version: 2,
+            key_id: [0x5Au8; 16],
+            algorithm: RuntimeSignatureClass::MlDsa65,
+            public_key: Bytes::from_static(&[0x11u8; 1952]),
+            predecessor_key_id: None,
+            effective_tick: Tick(7),
+            retirement_tick: None,
+            signer_policy: AttestationSignerPolicy::SelfSigned,
+            attestation: Attestation::from_bytes([0u8; 64]),
+            attestation_pqc: Some(vec![0xABu8; 3309]),
+        };
+        let bytes = postcard::to_stdvec(&ev).unwrap();
+        let back: AuditReceiptKeyPolicy = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(ev, back);
+        assert_eq!(back.attestation_pqc.as_deref().map(<[u8]>::len), Some(3309));
     }
 
     #[cfg(feature = "audit-receipt-key-identified")]
@@ -784,12 +914,12 @@ mod tests {
     ))]
     #[test]
     fn forward_looking_events_are_define_only() {
-        // The TYPE_CODE constants exist + are pinned. Schema version
-        // is 1 (initial wire format). No emission entry point is
-        // defined for either type — verified structurally by Track
-        // H.3 grep. This test is the architecture anchor.
+        // The TYPE_CODE constants exist + are pinned. ReplicaIdAllocation
+        // stays at schema 1; AuditReceiptKeyPolicy is at schema 2 (the
+        // additive attestation_pqc slot). No emission entry point is
+        // defined for either type. This test is the structural anchor.
         assert_eq!(ReplicaIdAllocation::SCHEMA_VERSION, 1);
-        assert_eq!(AuditReceiptKeyPolicy::SCHEMA_VERSION, 1);
+        assert_eq!(AuditReceiptKeyPolicy::SCHEMA_VERSION, 2);
         assert_eq!(ReplicaIdAllocation::TYPE_CODE, 0x0003_0F0D);
         assert_eq!(AuditReceiptKeyPolicy::TYPE_CODE, 0x0003_0F0E);
     }

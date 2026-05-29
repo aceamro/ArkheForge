@@ -17,7 +17,7 @@
 //! toml_canonical_bytes)` — domain-separated.
 
 use arkhe_forge_core::context::{ActionContext, ActionError};
-use arkhe_forge_core::event::{RuntimeBootstrap, SemVer};
+use arkhe_forge_core::event::{RuntimeBootstrap, RuntimeSignatureClass, SemVer};
 use arkhe_kernel::abi::{Tick, TypeCode};
 use serde::{Deserialize, Serialize};
 
@@ -237,6 +237,16 @@ impl ManifestLoader {
         if m.audit.dek_backend == "software-kek" && (current.0, current.1) > (0, 15) {
             return Err(ManifestError::SoftwareKekProductionRefused {
                 current: m.runtime.runtime_current.clone(),
+            });
+        }
+
+        // audit.signature_class must be a known RuntimeSignatureClass token
+        // (the E13 policy-pinned class). An unknown token is rejected rather
+        // than silently treated as `none`.
+        if RuntimeSignatureClass::from_manifest_str(&m.audit.signature_class).is_none() {
+            return Err(ManifestError::InvalidValue {
+                field: "audit.signature_class",
+                reason: format!("unknown signature class {}", m.audit.signature_class),
             });
         }
 
@@ -515,6 +525,36 @@ compliance_tier = 0
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_signature_class() {
+        let bad = TIER0_DEV_TOML.replace(
+            "signature_class = \"ed25519\"",
+            "signature_class = \"dilithium\"",
+        );
+        let err = ManifestLoader::load(bad.as_bytes()).unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::InvalidValue {
+                field: "audit.signature_class",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn manifest_accepts_each_valid_signature_class() {
+        for class in ["none", "ed25519", "ml-dsa-65", "hybrid"] {
+            let good = TIER0_DEV_TOML.replace(
+                "signature_class = \"ed25519\"",
+                &format!("signature_class = \"{class}\""),
+            );
+            assert!(
+                ManifestLoader::load(good.as_bytes()).is_ok(),
+                "signature_class {class} must be accepted"
+            );
+        }
     }
 
     #[test]
