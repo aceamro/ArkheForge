@@ -322,15 +322,19 @@ mod hybrid_and_mode_model {
         None,
         /// RFC 8032 Ed25519 — single-signature mode (Tier 2).
         Ed25519,
+        /// ML-DSA 65 — single post-quantum signature (NIST FIPS 204).
+        MlDsa65,
         /// Hybrid — Ed25519 + ML-DSA 65 dual-sign, AND-mode.
         Hybrid,
     }
 
     /// Verify a record under the given `SignatureClass` policy.
     ///
-    /// Models the dispatch logic in `wal.rs::verify_chain`:
+    /// Models the dispatch logic in `wal.rs::verify_chain` (4 arms,
+    /// matching the real `verify_attestation` dispatch):
     /// - `None`: no signature check (chain integrity only)
     /// - `Ed25519`: single Ed25519 verify
+    /// - `MlDsa65`: single ML-DSA 65 verify
     /// - `Hybrid`: both Ed25519 AND ML-DSA 65 verify (AND-mode —
     ///   AND-mode short-circuit failure if either is `false`)
     ///
@@ -345,6 +349,7 @@ mod hybrid_and_mode_model {
         match class {
             SignatureClass::None => true,
             SignatureClass::Ed25519 => ed25519_ok,
+            SignatureClass::MlDsa65 => mldsa65_ok,
             SignatureClass::Hybrid => ed25519_ok && mldsa65_ok,
         }
     }
@@ -356,11 +361,12 @@ mod hybrid_and_mode_model {
 /// BOOLEAN verify outcomes:
 /// - `None` → pass regardless of sig outcomes
 /// - `Ed25519` → pass iff `ed25519_ok`
+/// - `MlDsa65` → pass iff `mldsa65_ok`
 /// - `Hybrid` → pass iff `ed25519_ok AND mldsa65_ok` (AND-mode
 ///   dispatch — both verifies invoked, fail if either is `false`)
 ///
-/// **Bounded MC**: 3 `SignatureClass` variants × 2 ed25519 outcomes ×
-/// 2 mldsa65 outcomes = 12 cases. SMT unwind = 8.
+/// **Bounded MC**: 4 `SignatureClass` variants × 2 ed25519 outcomes ×
+/// 2 mldsa65 outcomes = 16 cases. SMT unwind = 8.
 ///
 /// **Anchor**: Implementation-level proof anchor for
 /// `wal.rs::verify_chain` Hybrid match arm dispatch logic.
@@ -375,12 +381,13 @@ mod hybrid_and_mode_model {
 fn kani_hybrid_and_mode_property() {
     use hybrid_and_mode_model::{verify_record, SignatureClass};
 
-    // Symbolic policy: 0 = None, 1 = Ed25519, 2 = Hybrid.
+    // Symbolic policy: 0 = None, 1 = Ed25519, 2 = MlDsa65, 3 = Hybrid.
     let policy_byte: u8 = kani::any();
-    kani::assume(policy_byte < 3);
+    kani::assume(policy_byte < 4);
     let class = match policy_byte {
         0 => SignatureClass::None,
         1 => SignatureClass::Ed25519,
+        2 => SignatureClass::MlDsa65,
         _ => SignatureClass::Hybrid,
     };
 
@@ -401,6 +408,10 @@ fn kani_hybrid_and_mode_property() {
         SignatureClass::Ed25519 => {
             // Single Ed25519 verify.
             assert!(pass == ed25519_ok);
+        }
+        SignatureClass::MlDsa65 => {
+            // Single ML-DSA 65 verify.
+            assert!(pass == mldsa65_ok);
         }
         SignatureClass::Hybrid => {
             // AND-mode: both must pass; fail if either is false.

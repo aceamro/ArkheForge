@@ -35,7 +35,7 @@ zeroize           = { workspace = true }
 arkhe-forge-core  = { path = "../../arkhe-forge-core", version = "0.13" }
 # Kernel ABI types (`Principal`, `Tick`, `InstanceId`, `CapabilityMask`)
 # consumed by `ActionContext::new`. Re-uses the existing
-# `[workspace.dependencies] arkhe-kernel = "0.13"` pin — no new
+# `[workspace.dependencies] arkhe-kernel = "0.14"` pin — no new
 # crates.io entry.
 arkhe-kernel      = { workspace = true }
 # ArkheForge L2 integration. The `RuntimeService` dispatcher wraps

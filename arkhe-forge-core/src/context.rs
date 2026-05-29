@@ -21,13 +21,13 @@
 //! forge `compute()` body, and returns the drained `Vec<Op>` to the
 //! kernel. The kernel performs authorize → dispatch → WAL append on
 //! its own internal `Effect<'i, _>` lifecycle (the `Effect` constructor
-//! and `authorize` function are kernel-private in v0.13, by design).
+//! and `authorize` function are kernel-private, by design).
 //!
 //! ## `'i` brand
 //!
 //! The `'i` lifetime parameter is currently a phantom on the public
 //! API surface, reserved for a future L0 expansion that exposes the
-//! `Effect<'i, _>` brand to the L2 service layer. Kernel v0.13 keeps
+//! `Effect<'i, _>` brand to the L2 service layer. The kernel keeps
 //! the `Effect` brand internal, so the forge-side `'i` cannot be
 //! wired to a kernel-side `Effect<'i, _>` cross-call. The phantom
 //! position is preserved on the public API so a later release can
@@ -174,7 +174,7 @@ pub struct EventRecord {
 /// Per-Action compute context.
 ///
 /// The `'i` lifetime is currently a phantom on the public API surface.
-/// Kernel v0.13 keeps `Effect<'i, _>` private, so the forge-side `'i`
+/// The kernel keeps `Effect<'i, _>` private, so the forge-side `'i`
 /// brand cannot be wired to a kernel-side brand cross-call; the
 /// position is preserved so a future L0 expansion can switch to a
 /// real-brand binding without breaking the forge signature.

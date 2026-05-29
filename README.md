@@ -215,8 +215,8 @@ crates.io:
 
 ```toml
 [workspace.dependencies]
-arkhe-kernel = "0.13"
-arkhe-macros = "0.13"
+arkhe-kernel = "0.14"
+arkhe-macros = "0.14"
 ```
 
 No sibling repository checkout is required to build forge — `cargo build`

@@ -166,7 +166,7 @@ fn derive_action_impl(input: &DeriveInput, attrs: ActionAttrs) -> syn::Result<To
         // supplies the postcard-canonical default methods.
         //
         // `_sealed::Sealed` is `#[doc(hidden)] pub` in `arkhe-kernel`.
-        // arkhe-macros (the kernel's own derive crate, crates.io 0.13)
+        // arkhe-macros (the kernel's own derive crate, on crates.io)
         // is the conventional emitter; arkhe-forge-macros is the
         // workspace-internal sibling and emits the same shape under
         // the same A11 sanctioned-derive convention.
