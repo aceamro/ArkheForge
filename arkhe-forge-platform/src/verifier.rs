@@ -12,7 +12,7 @@
 //! The module is exported unconditionally (`pub mod verifier;`), so the
 //! dispatcher, [`VerifyError`], the domain helper, the Ed25519 arm, and
 //! [`dek_shred_message`] compile in the DEFAULT build. The ML-DSA-using
-//! code (`verify_ml_dsa65`'s real body, [`ReceiptSigner`]) is gated on
+//! code (`verify_ml_dsa65`'s real body, `ReceiptSigner`) is gated on
 //! `tier-2-pqc-receipts`; the default build links a stub
 //! `verify_ml_dsa65` that returns [`VerifyError::PqcUnavailable`].
 
@@ -280,7 +280,7 @@ fn verify_ml_dsa65(_vk_bytes: &[u8], _m: &[u8], _sig: &[u8]) -> Result<(), Verif
 ///
 /// Frozen layout: `dek_id.0 (16) ++ log_index.to_be_bytes() (8)` = 24
 /// bytes. This is the bare message; [`verify_attestation`] /
-/// [`ReceiptSigner::sign`] apply the domain prefix. The layout is pinned
+/// `ReceiptSigner::sign` apply the domain prefix. The layout is pinned
 /// by a test so any reordering / width change is caught.
 #[must_use]
 pub fn dek_shred_message(dek_id: &arkhe_forge_core::pii::DekId, log_index: u64) -> Vec<u8> {

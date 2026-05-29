@@ -170,7 +170,7 @@ pub enum DekShredError {
 /// attestation class is [`RuntimeSignatureClass::None`]: a verifier
 /// presented with this attestation correctly rejects it as "not a
 /// signature". Real ML-DSA-65 receipt signing is provided by
-/// [`SigningDekShredder`] under the `tier-2-pqc-receipts` feature.
+/// `SigningDekShredder` under the `tier-2-pqc-receipts` feature.
 #[derive(Debug, Default)]
 pub struct InMemoryDekShredder {
     live: HashMap<DekId, ()>,
