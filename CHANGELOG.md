@@ -51,6 +51,17 @@ stable `=0.1.0`.
 - Manifest `audit.signature_class` is validated (unknown values rejected).
 
 ### Changed
+- **Breaking — acting-actor injection.** `RuntimeService::dispatch` takes a
+  new trailing argument `authenticated_actor: Option<ActorId>`: the acting
+  identity is injected through the kernel actor channel (the single source of
+  truth the integrator's auth layer resolves), never carried on the wire.
+  Forge actions dropped their wire actor/creator field accordingly —
+  `SubmitActivity` takes `ActivityDraft` (was `ActivityRecord`) and
+  `CreateSpace` takes `SpaceConfigDraft` (was `SpaceConfig`); compute stamps
+  the injected actor into the stored record. This makes the GDPR-gate
+  actor-substitution vector structurally impossible rather than merely
+  checked. Removed: the `GdprGuard` trait, `gdpr_actor()`, and
+  `DispatchError::ActorMismatch`.
 - `arkhe-rand` KDF domain tag is now version-agnostic (`"arkhe-rand
   stream"`, previously carried a `v0.13` suffix). PRNG streams therefore
   differ from 0.13.0 for the same seed — a deliberate one-time change at

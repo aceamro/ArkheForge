@@ -17,7 +17,7 @@ version alignment and feature gating stay coherent.
 
 ```toml
 [dependencies]
-arkhe-forge = { version = "0.13", features = ["tier-1-kms"] }
+arkhe-forge = { version = "0.14", features = ["tier-1-kms"] }
 ```
 
 ```rust

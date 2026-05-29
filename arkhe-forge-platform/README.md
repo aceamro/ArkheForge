@@ -42,12 +42,12 @@ Ed25519.
 
 ```toml
 [dependencies]
-arkhe-forge-platform = { version = "0.13", features = ["tier-1-kms"] }
+arkhe-forge-platform = { version = "0.14", features = ["tier-1-kms"] }
 ```
 
 ```rust
 use arkhe_forge_platform::PLATFORM_SEMVER;
-assert_eq!(PLATFORM_SEMVER, (0, 13, 0));
+assert_eq!(PLATFORM_SEMVER, (0, 14, 0));
 ```
 
 ## Documentation

@@ -67,7 +67,7 @@ ARKHE_RAND_REGEN_GOLDEN=1 cargo test -p arkhe-rand --test golden_vector
 - `#![forbid(unsafe_code)]` — strictly stronger than `deny`. Audit
   surface is safe-Rust only.
 - `Zeroize` + `ZeroizeOnDrop` — seed bytes are wiped on drop.
-- Single-version pin `0.13.0` per the workspace policy.
+- Version tracks the ArkheKernel epoch — currently `0.14.0`.
 
 ## License
 
