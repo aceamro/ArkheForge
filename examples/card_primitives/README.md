@@ -144,7 +144,7 @@ Two BLAKE3 modes appear:
   the `RecordHandShowdown::compute` body. Generic mode is the right
   primitive for public commitments — they are not key-derivation
   material.
-- **KDF mode** (`Hasher::new_derive_key("arkhe-rand stream v0.13")`)
+- **KDF mode** (`Hasher::new_derive_key("arkhe-rand stream")`)
   is used internally by `arkhe-rand::RngSource::from_seed`. The
   context string is version-pinned; any later stream-format change
   surfaces as an explicit version bump rather than a silent break in

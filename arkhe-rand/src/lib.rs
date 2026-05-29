@@ -13,10 +13,10 @@
 //! # Cryptographic core
 //!
 //! Each [`RngSource`] wraps a BLAKE3 XOF stream constructed via the KDF
-//! mode `Hasher::new_derive_key("arkhe-rand stream v0.13").update(seed)`.
-//! The context string eliminates cross-domain seed collisions; the
-//! `v0.13` tag is permanent under the project's single-version pin so
-//! patch releases (0.13.x) preserve wire stability for stored seeds.
+//! mode `Hasher::new_derive_key("arkhe-rand stream").update(seed)`. The
+//! context string is a version-agnostic domain-separation tag: it scopes
+//! the stream away from other BLAKE3 uses of the same seed, and is held
+//! stable so stored seeds replay byte-identically.
 //!
 //! XOF reader monotonic property is inherited from the `blake3` crate
 //! spec (audited via `supply-chain/audits.toml [[audits.blake3]]`).
@@ -51,10 +51,11 @@ mod shuffle;
 pub use range::{gen_range, gen_range_inclusive, RandInt};
 pub use shuffle::shuffle;
 
-/// BLAKE3 KDF context string. Permanent under the v0.13 single-version
-/// pin — patch releases (0.13.x) keep this exact byte sequence so
-/// stored seeds replay byte-identically.
-const KDF_CONTEXT: &str = "arkhe-rand stream v0.13";
+/// BLAKE3 KDF context string — a version-agnostic domain-separation tag.
+/// It scopes arkhe-rand's stream away from other BLAKE3 uses of the same
+/// seed and is held stable across crate versions so stored seeds replay
+/// byte-identically.
+const KDF_CONTEXT: &str = "arkhe-rand stream";
 
 /// BLAKE3-keyed PRNG.
 ///

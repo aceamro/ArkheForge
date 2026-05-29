@@ -15,10 +15,10 @@ shell-side code (BBS, examples, downstream applications).
 ## Cryptographic core
 
 Each `RngSource` wraps a BLAKE3 XOF stream constructed via the KDF
-mode `Hasher::new_derive_key("arkhe-rand stream v0.13").update(seed)`.
-The context string eliminates cross-domain seed collisions; the
-`v0.13` tag is permanent under the project's single-version pin so
-patch releases (0.13.x) preserve byte-for-byte stream stability.
+mode `Hasher::new_derive_key("arkhe-rand stream").update(seed)`. The
+context string is a version-agnostic domain-separation tag: it scopes
+the stream away from other BLAKE3 uses of the same seed, and is held
+stable so stored seeds replay byte-identically.
 
 XOF reader monotonic property is inherited from the `blake3` crate
 spec, audited via the workspace `supply-chain/audits.toml` entry.

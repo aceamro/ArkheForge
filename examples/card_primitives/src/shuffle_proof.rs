@@ -9,7 +9,7 @@
 //!   shuffle to confirm the dealer could not have changed the deck
 //!   ordering after committing.
 //! - **PRNG = `arkhe_rand::RngSource`.** BLAKE3 KDF mode (context tag
-//!   `"arkhe-rand stream v0.13"`) drives a single continuous XOF stream
+//!   `"arkhe-rand stream"`) drives a single continuous XOF stream
 //!   for the shuffle. Cryptographically equivalent to ChaCha20-style
 //!   stream RNG for binding purposes; the audited `arkhe-rand` crate
 //!   centralises the keyed-PRNG primitive once for all shell-side
