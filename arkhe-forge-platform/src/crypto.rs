@@ -405,31 +405,6 @@ impl<T: PiiType> EncryptedPii<T> {
             _marker: PhantomData,
         }
     }
-
-    /// Non-typed copy of the envelope — used when the caller must move
-    /// between two `T`s during DEK rotation without re-encoding the
-    /// wire layout.
-    fn into_raw(self) -> RawEncryptedPii {
-        RawEncryptedPii {
-            dek_id: self.dek_id,
-            pii_code: self.pii_code,
-            aead_kind: self.aead_kind,
-            nonce: self.nonce,
-            ciphertext: self.ciphertext,
-        }
-    }
-}
-
-/// Type-erased [`EncryptedPii`] view — used internally by the DEK
-/// rotation helper to avoid a second generic bound during the
-/// decrypt-then-re-encrypt swap.
-#[derive(Debug, Clone)]
-struct RawEncryptedPii {
-    dek_id: DekId,
-    pii_code: u16,
-    aead_kind: AeadKind,
-    nonce: NonceBytes,
-    ciphertext: Bytes,
 }
 
 // ===================== CryptoCoordinator =====================
@@ -556,12 +531,22 @@ impl<N: NonceSource> CryptoCoordinator<N> {
     /// Variant of [`CryptoCoordinator::decrypt`] that tolerates a
     /// legacy `AeadKind` — used by the DEK rotation path so a slice of
     /// ciphertexts written under an older manifest `pii_cipher` can be
-    /// migrated in place. Caller supplies the historical kind; the
-    /// manifest downgrade check is bypassed (equivalence relation
-    /// anchored to the envelope's own `aead_kind`).
-    fn decrypt_raw_under(&self, dek: &Dek, raw: &RawEncryptedPii) -> Result<Vec<u8>, PiiError> {
-        let aad = compute_aad(&raw.dek_id, raw.pii_code, raw.aead_kind);
-        self.decrypt_raw(dek, raw.aead_kind, &raw.nonce, &aad, &raw.ciphertext)
+    /// migrated in place. Borrows the envelope directly (no per-element
+    /// clone); the manifest downgrade check is bypassed (equivalence
+    /// relation anchored to the envelope's own `aead_kind`).
+    fn decrypt_raw_under<T: PiiType>(
+        &self,
+        dek: &Dek,
+        envelope: &EncryptedPii<T>,
+    ) -> Result<Vec<u8>, PiiError> {
+        let aad = compute_aad(&envelope.dek_id, envelope.pii_code, envelope.aead_kind);
+        self.decrypt_raw(
+            dek,
+            envelope.aead_kind,
+            &envelope.nonce,
+            &aad,
+            &envelope.ciphertext,
+        )
     }
 
     fn encrypt_raw(
@@ -856,7 +841,9 @@ impl<N: NonceSource> CryptoCoordinator<N> {
 /// Callers must hold a single-writer lock across the slice while this
 /// helper runs — the coordinator does not expose its own synchronisation.
 /// The update also ticks `counter` (by the slice length) so the operator
-/// can observe the per-DEK rotation metric.
+/// can observe the per-DEK rotation metric. On a partial-failure rollback
+/// the `counter` is restored to its entry value alongside the ciphertexts,
+/// so the metric always matches the slice state.
 pub fn rotate_dek<T: PiiType>(
     coordinator: &CryptoCoordinator<impl NonceSource>,
     old_dek: &Dek,
@@ -866,34 +853,35 @@ pub fn rotate_dek<T: PiiType>(
     counter: &mut DekMessageCounter,
 ) -> Result<(), PiiError> {
     let originals: Vec<EncryptedPii<T>> = ciphertexts.to_vec();
-    for slot in ciphertexts.iter_mut() {
-        let raw = slot.clone().into_raw();
-        let plaintext_bytes = match coordinator.decrypt_raw_under(old_dek, &raw) {
-            Ok(v) => v,
+    // Snapshot the rotation metric so a rollback restores it in lockstep
+    // with the ciphertexts — otherwise the metric would over-count the
+    // elements re-encrypted before the failing one.
+    let counter_snapshot = counter.clone();
+    let aad = compute_aad(&new_dek_id, T::PII_CODE, coordinator.manifest_cipher);
+    // Index-based loop so the rollback can re-borrow the slice mutably
+    // without conflicting with a held element borrow.
+    for idx in 0..ciphertexts.len() {
+        let step = coordinator
+            .decrypt_raw_under(old_dek, &ciphertexts[idx])
+            .and_then(|plaintext_bytes| coordinator.encrypt_raw(new_dek, &aad, &plaintext_bytes));
+        match step {
+            Ok((nonce, new_ct)) => {
+                ciphertexts[idx] = EncryptedPii::new(
+                    new_dek_id,
+                    coordinator.manifest_cipher,
+                    nonce,
+                    Bytes::from(new_ct),
+                );
+                counter.record_message();
+            }
             Err(err) => {
                 for (target, backup) in ciphertexts.iter_mut().zip(originals.iter()) {
                     *target = backup.clone();
                 }
+                *counter = counter_snapshot;
                 return Err(err);
             }
-        };
-        let aad = compute_aad(&new_dek_id, T::PII_CODE, coordinator.manifest_cipher);
-        let (nonce, new_ct) = match coordinator.encrypt_raw(new_dek, &aad, &plaintext_bytes) {
-            Ok(v) => v,
-            Err(err) => {
-                for (target, backup) in ciphertexts.iter_mut().zip(originals.iter()) {
-                    *target = backup.clone();
-                }
-                return Err(err);
-            }
-        };
-        *slot = EncryptedPii::new(
-            new_dek_id,
-            coordinator.manifest_cipher,
-            nonce,
-            Bytes::from(new_ct),
-        );
-        counter.record_message();
+        }
     }
     Ok(())
 }
@@ -1360,5 +1348,51 @@ mod tests {
         assert!(matches!(err, PiiError::AadMismatch));
         // Slice rolled back — original envelope intact.
         assert_eq!(envelopes[0], original_envelope);
+    }
+
+    /// #9 regression — a partial-failure rollback must restore the
+    /// `DekMessageCounter` to its entry value, not leave it counting the
+    /// elements re-encrypted before the failing one. Element 0 rotates
+    /// (counter would tick to 1), element 1 has a corrupted ciphertext so
+    /// its decrypt fails; the rollback must restore both the slice AND the
+    /// counter so the metric matches the rolled-back (untouched) state.
+    #[cfg(feature = "tier-1-kms")]
+    #[test]
+    fn dek_rotate_partial_failure_rolls_back_counter() {
+        let coord = CryptoCoordinator::new(AeadKind::XChaCha20Poly1305, FixedNonce);
+        let old = make_dek(0x10);
+        let new = make_dek(0x20);
+        let new_id = make_dek_id(0x02);
+
+        let good = coord
+            .encrypt(&ActorHandle(b"first".to_vec()), &old, make_dek_id(0x01))
+            .unwrap();
+        // Corrupt a copy so its decrypt under `old` fails the tag check —
+        // forces a rollback after element 0 has already been processed.
+        let mut corrupt_ct = good.ciphertext.to_vec();
+        corrupt_ct[0] ^= 0xFF;
+        let corrupt = EncryptedPii::<ActorHandle>::new(
+            good.dek_id,
+            good.aead_kind,
+            good.nonce.clone(),
+            Bytes::from(corrupt_ct),
+        );
+        let mut envelopes = vec![good.clone(), corrupt.clone()];
+
+        // Pre-tick the counter so we can prove the snapshot is the *entry*
+        // value, not a fresh zero.
+        let mut counter = DekMessageCounter::new(new_id);
+        counter.record_message();
+        counter.record_message();
+        let entry_count = counter.count();
+        assert_eq!(entry_count, 2);
+
+        let err = rotate_dek(&coord, &old, &new, new_id, &mut envelopes, &mut counter).unwrap_err();
+        assert!(matches!(err, PiiError::AadMismatch));
+        // Ciphertexts rolled back.
+        assert_eq!(envelopes[0], good);
+        assert_eq!(envelopes[1], corrupt);
+        // Counter restored to its entry value — element 0's tick is undone.
+        assert_eq!(counter.count(), entry_count);
     }
 }

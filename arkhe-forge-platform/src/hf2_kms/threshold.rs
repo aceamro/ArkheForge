@@ -150,12 +150,28 @@ fn gf_inv(a: u8) -> u8 {
 
 /// Evaluate a polynomial (coefficients in ascending order: `c0, c1, ..., c_{k-1}`)
 /// at point `x` over `GF(2^8)`. Horner form.
+#[cfg(test)]
 fn gf_poly_eval(coeffs: &[u8], x: u8) -> u8 {
     let mut acc: u8 = 0;
     for &c in coeffs.iter().rev() {
         acc = gf_add(gf_mul(acc, x), c);
     }
     acc
+}
+
+/// Evaluate `p(x) = const_term + c1*x + c2*x^2 + ...` at `x` over `GF(2^8)`,
+/// where `coeffs = [c1, c2, ...]` are the higher-degree coefficients in
+/// ascending order. Splitting the constant term out lets `split_secret`
+/// evaluate one polynomial per `(secret-byte x share)` pair without
+/// allocating a fresh coefficient `Vec` each time. Horner form.
+#[inline]
+fn gf_poly_eval_with_const(const_term: u8, coeffs: &[u8], x: u8) -> u8 {
+    let mut acc: u8 = 0;
+    for &c in coeffs.iter().rev() {
+        acc = gf_add(gf_mul(acc, x), c);
+    }
+    // Final Horner step folds in the constant term.
+    gf_add(gf_mul(acc, x), const_term)
 }
 
 // ───────────────────── Split / combine ─────────────────────
@@ -191,13 +207,14 @@ pub fn split_secret(secret: &[u8], config: ThresholdConfig) -> Result<Vec<Share>
     for share_idx in 1..=(n as u8) {
         let mut ys = Vec::with_capacity(secret.len());
         for (byte_idx, &secret_byte) in secret.iter().enumerate() {
-            // Polynomial `p(x) = secret_byte + c1*x + c2*x^2 + ...`.
+            // Polynomial `p(x) = secret_byte + c1*x + c2*x^2 + ...`. The
+            // higher-degree coefficients live in `random_coeffs`; eval them
+            // in place with the secret byte as the constant term so no
+            // per-pair coefficient Vec is allocated.
             let start = byte_idx * (t - 1);
             let end = start + (t - 1);
-            let mut poly = Vec::with_capacity(t);
-            poly.push(secret_byte);
-            poly.extend_from_slice(&random_coeffs[start..end]);
-            ys.push(gf_poly_eval(&poly, share_idx));
+            let coeffs = &random_coeffs[start..end];
+            ys.push(gf_poly_eval_with_const(secret_byte, coeffs, share_idx));
         }
         shares.push(Share {
             index: share_idx,
@@ -439,5 +456,29 @@ mod tests {
     #[test]
     fn gf_inv_of_zero_is_zero() {
         assert_eq!(gf_inv(0), 0);
+    }
+
+    #[test]
+    fn poly_eval_with_const_matches_full_coeff_eval() {
+        // #12 — the alloc-free `gf_poly_eval_with_const` must agree with the
+        // reference `gf_poly_eval` over a contiguous `[c0, c1, ...]` vector
+        // for every evaluation point. Exhaustive over x with a fixed
+        // polynomial, plus a couple of degenerate cases.
+        let const_term = 0x57u8;
+        let coeffs = [0x01u8, 0x83, 0x2A, 0xFF];
+        let mut full = Vec::with_capacity(1 + coeffs.len());
+        full.push(const_term);
+        full.extend_from_slice(&coeffs);
+        for x in 0..=255u8 {
+            assert_eq!(
+                gf_poly_eval_with_const(const_term, &coeffs, x),
+                gf_poly_eval(&full, x),
+                "mismatch at x={x}"
+            );
+        }
+        // Degenerate: no higher-degree coeffs → constant polynomial.
+        for x in 0..=255u8 {
+            assert_eq!(gf_poly_eval_with_const(0x9C, &[], x), 0x9C);
+        }
     }
 }

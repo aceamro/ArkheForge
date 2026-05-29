@@ -198,9 +198,24 @@ impl InMemoryDekShredder {
         self.shredded.contains_key(dek_id)
     }
 
-    fn issue_attestation(&mut self, dek_id: DekId) -> DekShredAttestation {
+    /// Test-only — force the next log index so the overflow guard in
+    /// [`Self::issue_attestation`] can be exercised without 2^64 shreds.
+    #[cfg(test)]
+    fn set_next_log_index_for_test(&mut self, n: u64) {
+        self.next_log_index = n;
+    }
+
+    fn issue_attestation(&mut self, dek_id: DekId) -> Result<DekShredAttestation, DekShredError> {
         let log_index = self.next_log_index;
-        self.next_log_index = self.next_log_index.saturating_add(1);
+        // `checked_add` rather than `saturating_add` — saturating would
+        // pin the index at `u64::MAX` and hand out colliding log entries,
+        // silently breaking the transparency layer's gap detection. An
+        // overflow here is operationally impossible (2^64 shreds) but we
+        // surface it as a hard backend error rather than corrupt the log.
+        self.next_log_index = self
+            .next_log_index
+            .checked_add(1)
+            .ok_or(DekShredError::Backend("DEK shred log index overflow"))?;
         // Deterministic payload — domain-separated BLAKE3 keyed by
         // `dek_id`. This is a MAC / transparency digest, NOT a signature,
         // so the class is `None`. Production paths sign with an HSM-held
@@ -209,11 +224,11 @@ impl InMemoryDekShredder {
         let mut h = blake3::Hasher::new_keyed(&key);
         h.update(&log_index.to_be_bytes());
         let digest = h.finalize();
-        DekShredAttestation {
+        Ok(DekShredAttestation {
             attestation_class: RuntimeSignatureClass::None,
             attestation_bytes: Bytes::copy_from_slice(digest.as_bytes()),
             log_index: Some(log_index),
-        }
+        })
     }
 
     /// Overwrite the cached attestation for `dek_id` (idempotency-cache
@@ -234,7 +249,7 @@ impl DekShredder for InMemoryDekShredder {
         if self.live.remove(&dek_id).is_none() {
             return Err(DekShredError::UnknownDek);
         }
-        let attestation = self.issue_attestation(dek_id);
+        let attestation = self.issue_attestation(dek_id)?;
         self.shredded.insert(dek_id, attestation.clone());
         Ok(attestation)
     }
@@ -686,6 +701,34 @@ mod tests {
             .unwrap();
         let empty = obs.drain_completions();
         assert_eq!(empty[0].attestation.log_index, None);
+    }
+
+    #[test]
+    fn shred_log_index_overflow_surfaces_backend_error() {
+        // #19 regression — when the next log index can no longer advance
+        // (`next_log_index == u64::MAX`, so the post-issue increment would
+        // overflow), `checked_add` must surface `DekShredError::Backend`
+        // rather than saturating. Saturating would pin the index at the
+        // ceiling and hand out colliding log entries, breaking the
+        // transparency layer's gap detection.
+        let mut shredder = InMemoryDekShredder::new();
+
+        // One shred just below the ceiling still succeeds (index advances
+        // from MAX-1 to MAX).
+        let dek_below = DekId([0x01; 16]);
+        shredder.register(dek_below);
+        shredder.set_next_log_index_for_test(u64::MAX - 1);
+        let below = shredder.shred(dek_below).unwrap();
+        assert_eq!(below.log_index, Some(u64::MAX - 1));
+
+        // The next shred would need to advance past u64::MAX — overflow.
+        let dek_overflow = DekId([0x02; 16]);
+        shredder.register(dek_overflow);
+        let err = shredder.shred(dek_overflow).unwrap_err();
+        assert!(
+            matches!(err, DekShredError::Backend(msg) if msg.contains("overflow")),
+            "log index overflow must surface as a backend error, got {err:?}"
+        );
     }
 
     #[test]

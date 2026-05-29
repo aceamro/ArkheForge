@@ -16,6 +16,7 @@
 //!   deadlock. Callers either own a dedicated blocking context or call
 //!   [`AwsKmsBackend::new_in_runtime`] with an explicit `Handle`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use aws_config::{BehaviorVersion, Region};
@@ -26,6 +27,7 @@ use aws_sdk_kms::{
 };
 use bytes::Bytes;
 use tokio::runtime::{Handle, Runtime};
+use zeroize::Zeroizing;
 
 use arkhe_forge_core::event::RuntimeSignatureClass;
 use arkhe_forge_core::pii::DekId;
@@ -48,6 +50,11 @@ use super::kms_backend::{KekRef, KeyDeletionAttestation, KmsBackend, KmsError};
 pub struct AwsKmsBackend {
     client: KmsClient,
     executor: Executor,
+    /// Monotonic destruction-log index for [`delete_key`] attestations.
+    /// Mirrors `MockKmsBackend::destruction_log_index` so the
+    /// `DekShredder` gap-detection contract holds — the AWS deletion_date
+    /// (wall-clock) folds into the attestation payload instead.
+    destruction_log_index: AtomicU64,
 }
 
 enum Executor {
@@ -80,6 +87,7 @@ impl AwsKmsBackend {
         Ok(Self {
             client,
             executor: Executor::Owned(Arc::new(runtime)),
+            destruction_log_index: AtomicU64::new(0),
         })
     }
 
@@ -90,6 +98,7 @@ impl AwsKmsBackend {
         Self {
             client,
             executor: Executor::Borrowed(handle),
+            destruction_log_index: AtomicU64::new(0),
         }
     }
 
@@ -141,8 +150,12 @@ impl KmsBackend for AwsKmsBackend {
                 .map_err(map_sdk_error)?;
 
             // `Plaintext` is `Option<Blob>`; AWS returns it for GenerateDataKey.
+            // The plaintext DEK leaves the SDK as an owned `Vec<u8>` on the
+            // heap. Wrap it in `Zeroizing` so the buffer is scrubbed when it
+            // drops at the end of this scope — no plaintext copy outlives the
+            // scrub (the only durable copy is the zeroize-on-drop `Dek`).
             let plaintext = out.plaintext.ok_or(KmsError::UnwrapFailed)?;
-            let plaintext_bytes = plaintext.into_inner();
+            let plaintext_bytes = Zeroizing::new(plaintext.into_inner());
             if plaintext_bytes.len() != 32 {
                 return Err(KmsError::Backend(format!(
                     "unexpected DEK length: {}",
@@ -170,11 +183,16 @@ impl KmsBackend for AwsKmsBackend {
 
     fn wrap_dek(&self, dek: &Dek, kek_ref: &KekRef) -> Result<Bytes, KmsError> {
         self.block_on(async {
+            // Build the SDK plaintext blob from a zeroized buffer so the
+            // copy of the DEK we hand to the SDK is scrubbed when it drops
+            // at the end of this scope. `Blob::new` copies the bytes, so the
+            // `Zeroizing` source can drop right after the builder call.
+            let plaintext = Zeroizing::new(dek.as_bytes().to_vec());
             let out = self
                 .client
                 .encrypt()
                 .key_id(kek_ref.as_str())
-                .plaintext(Blob::new(dek.as_bytes().to_vec()))
+                .plaintext(Blob::new(plaintext.as_slice()))
                 .send()
                 .await
                 .map_err(map_sdk_error)?;
@@ -193,8 +211,10 @@ impl KmsBackend for AwsKmsBackend {
                 .send()
                 .await
                 .map_err(map_sdk_error)?;
+            // Wrap the SDK plaintext in `Zeroizing` so the heap `Vec` is
+            // scrubbed on drop — only the zeroize-on-drop `Dek` outlives it.
             let plaintext = out.plaintext.ok_or(KmsError::UnwrapFailed)?;
-            let bytes = plaintext.into_inner();
+            let bytes = Zeroizing::new(plaintext.into_inner());
             if bytes.len() != 32 {
                 return Err(KmsError::UnwrapFailed);
             }
@@ -222,8 +242,15 @@ impl KmsBackend for AwsKmsBackend {
             // round-trip. This payload is a transparency digest, NOT a
             // signature, so the class is `None`. Production setups layer a
             // genuine HSM signature on top via a separate attestation service.
+            //
+            // `log_index` must be monotonic for the DekShredder gap-detection
+            // contract — a wall-clock `deletion_date` is non-monotonic
+            // (clock skew, equal-second collisions), so it goes into the
+            // attestation payload instead. The index comes from a per-backend
+            // monotonic counter (mirrors MockKmsBackend::destruction_log_index).
             let key_id = out.key_id.unwrap_or_default();
             let deletion_ts = out.deletion_date.map(|d| d.secs()).unwrap_or_default();
+            let log_index = self.destruction_log_index.fetch_add(1, Ordering::Relaxed);
             let mut h = blake3::Hasher::new();
             h.update(b"arkhe-forge-aws-kms-delete-attestation");
             h.update(key_id.as_bytes());
@@ -232,7 +259,7 @@ impl KmsBackend for AwsKmsBackend {
             Ok(DekShredAttestation {
                 attestation_class: RuntimeSignatureClass::None,
                 attestation_bytes: Bytes::copy_from_slice(&payload),
-                log_index: Some(deletion_ts as u64),
+                log_index: Some(log_index),
             })
         })
     }
@@ -316,5 +343,28 @@ mod tests {
     fn map_sdk_error_wraps_display_in_backend_variant() {
         let err = map_sdk_error("boom");
         assert!(matches!(err, KmsError::Backend(msg) if msg.contains("boom")));
+    }
+
+    #[test]
+    fn destruction_log_index_starts_at_zero_and_is_monotonic() {
+        // #5 regression — `delete_key` assigns the attestation `log_index`
+        // from a per-backend monotonic counter (not the wall-clock
+        // deletion_date). The live network call is out of CI scope, so we
+        // exercise the counter's fetch-add semantics directly: it starts at
+        // 0 and yields a strictly increasing sequence (0, 1, 2, …) exactly
+        // as the delete path consumes it.
+        let backend = AwsKmsBackend::new("us-east-1").expect("runtime built");
+        let first = backend
+            .destruction_log_index
+            .fetch_add(1, Ordering::Relaxed);
+        let second = backend
+            .destruction_log_index
+            .fetch_add(1, Ordering::Relaxed);
+        let third = backend
+            .destruction_log_index
+            .fetch_add(1, Ordering::Relaxed);
+        assert_eq!(first, 0);
+        assert_eq!(second, 1);
+        assert_eq!(third, 2);
     }
 }

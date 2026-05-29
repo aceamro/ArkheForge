@@ -153,7 +153,13 @@ impl AuthCredential {
                     && p.p_cost >= Self::MIN_ARGON2ID_P_COST
             }
             KdfKind::Scrypt => {
+                // Scrypt's N (cost) parameter MUST be a power of two — both
+                // the `MIN_SCRYPT_N_COST` doc (2^15) and RFC 7914 §2 require
+                // it. A non-power-of-two N is rejected by the scrypt
+                // primitive at hash time; enforce it here so a weak / invalid
+                // credential never reaches `set_component`.
                 p.m_cost >= Self::MIN_SCRYPT_N_COST
+                    && p.m_cost.is_power_of_two()
                     && p.t_cost >= Self::MIN_SCRYPT_R_COST
                     && p.p_cost >= 1
             }
@@ -256,6 +262,53 @@ mod tests {
             KdfKind::Argon2id,
             &params
         ));
+    }
+
+    #[test]
+    fn scrypt_accepts_power_of_two_n_cost() {
+        // #6 — a valid Scrypt config with N = 2^15 (power of two) passes.
+        let params = KdfParams {
+            m_cost: AuthCredential::MIN_SCRYPT_N_COST,
+            t_cost: AuthCredential::MIN_SCRYPT_R_COST,
+            p_cost: 1,
+        };
+        assert!(AuthCredential::validate_kdf_params(
+            KdfKind::Scrypt,
+            &params
+        ));
+        // 2^16 is also a valid power of two above the minimum.
+        let bigger = KdfParams {
+            m_cost: 1 << 16,
+            t_cost: AuthCredential::MIN_SCRYPT_R_COST,
+            p_cost: 1,
+        };
+        assert!(AuthCredential::validate_kdf_params(
+            KdfKind::Scrypt,
+            &bigger
+        ));
+    }
+
+    #[test]
+    fn scrypt_rejects_non_power_of_two_n_cost() {
+        // #6 regression — N above the minimum but not a power of two must be
+        // rejected (RFC 7914 §2). `MIN_SCRYPT_N_COST + 1` = 2^15 + 1 is the
+        // tightest such case.
+        let params = KdfParams {
+            m_cost: AuthCredential::MIN_SCRYPT_N_COST + 1,
+            t_cost: AuthCredential::MIN_SCRYPT_R_COST,
+            p_cost: 1,
+        };
+        assert!(!AuthCredential::validate_kdf_params(
+            KdfKind::Scrypt,
+            &params
+        ));
+        // A large non-power-of-two value is likewise rejected.
+        let odd = KdfParams {
+            m_cost: 100_000,
+            t_cost: AuthCredential::MIN_SCRYPT_R_COST,
+            p_cost: 1,
+        };
+        assert!(!AuthCredential::validate_kdf_params(KdfKind::Scrypt, &odd));
     }
 
     #[test]
