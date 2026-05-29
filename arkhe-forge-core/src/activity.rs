@@ -134,6 +134,10 @@ pub mod canonical_verbs {
 
 /// Target entity of an Activity. `#[non_exhaustive]` so additional canonical
 /// target families can append.
+///
+/// On-wire tag is the postcard VARIANT INDEX (0..N in declaration order), not
+/// the `repr(u8)` discriminant — the explicit values are a C-ABI hint, never
+/// the serialized byte.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

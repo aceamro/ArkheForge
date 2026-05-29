@@ -90,6 +90,10 @@ impl SemVer {
 /// Distinct from L0 `arkhe_kernel::persist::SignatureClass` (which
 /// holds key material). The L0 type is unserializable by design; this type
 /// is the serializable projection.
+///
+/// On-wire tag is the postcard VARIANT INDEX (0..N in declaration order), not
+/// the `repr(u8)` discriminant — the explicit values are a C-ABI hint, never
+/// the serialized byte.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -125,6 +129,10 @@ impl RuntimeSignatureClass {
 
 /// Compliance tier classifier — crypto-erasure protection level
 /// Compliance tier indicator.
+///
+/// On-wire tag is the postcard VARIANT INDEX (0..N in declaration order), not
+/// the `repr(u8)` discriminant — the explicit values are a C-ABI hint, never
+/// the serialized byte.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]

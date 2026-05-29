@@ -40,6 +40,10 @@ impl SpaceId {
 
 /// Space structural kind. `Extension` is an escape hatch — shell manifest must
 /// register the `type_code` with a `schema_hash` pin (E-space-6 / A15).
+///
+/// On-wire tag is the postcard VARIANT INDEX (0..N in declaration order), not
+/// the `repr(u8)` discriminant — the explicit `= 255` is a C-ABI hint, never
+/// the serialized byte.
 #[non_exhaustive]
 #[repr(u8)]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

@@ -289,7 +289,11 @@ impl<'i> ActionContext<'i> {
     /// tick produce distinct entities.
     pub fn next_id(&mut self, type_code: u32) -> Result<EntityId, ActionError> {
         let seq = self.id_seq;
-        self.id_seq = self.id_seq.wrapping_add(1);
+        // Checked, not wrapping: a 2^32 overflow would silently restart the
+        // sequence at 0 and re-derive an `EntityId` already assigned earlier
+        // in this compute. Advance first so a wrap is caught before this
+        // call hands out an id whose successor cannot be allocated.
+        self.id_seq = seq.checked_add(1).ok_or(ActionError::IdExhaustion)?;
         derive_entity_id(
             &self.world_seed,
             self.instance_id,
@@ -613,6 +617,21 @@ mod tests {
         let a = ctx.next_id(0x0003_0001).unwrap();
         let b = ctx.next_id(0x0003_0001).unwrap();
         assert_ne!(a, b, "sequential next_id calls must yield distinct ids");
+    }
+
+    #[test]
+    fn next_id_rejects_at_sequence_exhaustion_instead_of_wrapping() {
+        // Drive the per-context sequence to its u32 ceiling, then confirm the
+        // boundary call rejects with `IdExhaustion` rather than wrapping back
+        // to a previously-issued seq (the silent-duplicate regression).
+        let mut ctx = fixture_ctx();
+        ctx.id_seq = u32::MAX;
+        let err = ctx
+            .next_id(0x0003_0001)
+            .expect_err("u32::MAX boundary must reject, not wrap");
+        assert!(matches!(err, ActionError::IdExhaustion));
+        // Counter is unchanged — no silent wrap to 0 occurred.
+        assert_eq!(ctx.id_seq, u32::MAX);
     }
 
     #[test]

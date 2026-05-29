@@ -28,8 +28,11 @@ pub mod pii;
 pub mod pipeline;
 // Internal sealed-trait machinery — `__sealed::__Sealed` is exposed only so
 // the runtime derive macros can emit `impl __Sealed for UserType {}`.
-// Downstream crates must never reference this module; the dylint CI gate
-// flags any such usage. See `sealed.rs` for the soft-seal rationale.
+// Downstream crates must never reference this module. It is a convention seal,
+// not a compile-time hard seal: a derive macro in the sibling
+// `arkhe-forge-macros` crate emits the impl into downstream code, so the path
+// is necessarily name-reachable downstream and cannot be language-sealed. See
+// `sealed.rs` for the full rationale.
 #[doc(hidden)]
 #[path = "sealed.rs"]
 pub mod __sealed;
@@ -67,12 +70,18 @@ pub fn derive_entity_id(
 ) -> Option<EntityId> {
     let domain_key = blake3::derive_key("arkhe-forge-entity-id", world_seed);
     for bump in 0..MAX_ID_DERIVE_RETRIES {
-        let candidate_seq = seq.wrapping_add(bump);
         let mut h = blake3::Hasher::new_keyed(&domain_key);
         h.update(&instance_id.get().to_be_bytes());
         h.update(&type_code.0.to_be_bytes());
         h.update(&tick.0.to_be_bytes());
-        h.update(&candidate_seq.to_be_bytes());
+        // `seq` occupies the linear sequence domain; `bump` is a DISTINCT
+        // retry domain position. Hashing both (rather than folding `bump`
+        // into `seq` via wrapping_add, which let `seq=0,bump=1` collide with
+        // `seq=1,bump=0`) guarantees the zero-digest retry space cannot
+        // overlap the next caller's linear `seq` and produce a duplicate
+        // `EntityId` for two distinct `seq` values.
+        h.update(&seq.to_be_bytes());
+        h.update(&bump.to_be_bytes());
         let out = h.finalize();
         let digest = out.as_bytes();
         let mut first_eight = [0u8; 8];
@@ -138,5 +147,26 @@ mod lib_tests {
         let a = derive_entity_id(&seed, iid, TypeCode(0x0001_0001), Tick(1), 0);
         let b = derive_entity_id(&seed, iid, TypeCode(0x0001_0001), Tick(1), 1);
         assert_ne!(a, b);
+    }
+
+    /// Retry-domain non-overlap: the zero-digest retry hashes a separate
+    /// `bump` counter, so the retry space of `seq=k` cannot collide with the
+    /// linear id of any other `seq`. Exercising a contiguous seq range proves
+    /// the linear sequence stays collision-free; the previous `seq+bump` fold
+    /// admitted `(seq=0,bump=1)` == `(seq=1,bump=0)`.
+    #[test]
+    fn derive_entity_id_linear_seq_space_is_collision_free() {
+        use std::collections::HashSet;
+        let seed = [0x5Au8; 32];
+        let iid = instance(1);
+        let mut seen = HashSet::new();
+        for seq in 0u32..4096 {
+            let id = derive_entity_id(&seed, iid, TypeCode(0x0001_0001), Tick(7), seq)
+                .expect("non-zero digest within retry bound");
+            assert!(
+                seen.insert(id.get()),
+                "seq {seq} produced a duplicate EntityId — linear seq collision",
+            );
+        }
     }
 }

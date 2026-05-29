@@ -32,12 +32,6 @@ pub trait ArkheComponent:
     fn type_code() -> TypeCode {
         TypeCode(Self::TYPE_CODE)
     }
-
-    /// Approximate payload size for quota tracking. Default returns
-    /// `size_of::<Self>()`; override for `bytes::Bytes`-carrying Components.
-    fn approx_size(&self) -> usize {
-        core::mem::size_of::<Self>()
-    }
 }
 
 /// Fixed-capacity UTF-8 string — bounded at compile time by const generic `N`.
