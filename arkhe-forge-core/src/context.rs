@@ -528,11 +528,16 @@ impl<'i> ActionContext<'i> {
     ///   `RuntimeService::dispatch` (forge-platform) run with a viewless
     ///   bridge context (see [`crate::bridge`]), so this in-compute call
     ///   soft-passes. For that path the gate is enforced at the L2
-    ///   admission boundary: `dispatch` reads the action's
-    ///   [`GdprGuard::gdpr_actor`](crate::action::GdprGuard::gdpr_actor),
-    ///   binds the kernel `InstanceView`, and runs this same check BEFORE
+    ///   admission boundary: `dispatch` first authenticates the action's
+    ///   [`GdprGuard::gdpr_actor`](crate::action::GdprGuard::gdpr_actor)
+    ///   against the caller identity the auth layer resolved (rejecting a
+    ///   wire actor-substitution), then binds the kernel `InstanceView`
+    ///   and runs this same check on the now-verified actor BEFORE
     ///   `submit`, rejecting an erasure-pending action before it reaches
-    ///   the WAL.
+    ///   the WAL. The actor this gate evaluates is therefore the
+    ///   authenticated caller, not a trusted-by-default wire field — the
+    ///   gate is sound. It is live for any user whose `UserProfile` a
+    ///   production path has transitioned to `ErasurePending`.
     pub fn ensure_actor_eligible(
         &self,
         actor: ActorId,

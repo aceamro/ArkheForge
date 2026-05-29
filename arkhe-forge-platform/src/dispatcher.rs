@@ -39,6 +39,7 @@
 //! L2 layer matures.
 
 use arkhe_forge_core::action::GdprGuard;
+use arkhe_forge_core::actor::ActorId;
 use arkhe_forge_core::context::{ActionContext, ActionError};
 use arkhe_forge_core::user::UserId;
 use arkhe_kernel::abi::{ArkheError, CapabilityMask, InstanceId, Principal, Tick};
@@ -61,6 +62,24 @@ pub enum DispatchError {
     /// Kernel-side error from `submit` / `step` (e.g. `InstanceNotFound`).
     #[error("kernel error: {0}")]
     Kernel(#[from] ArkheError),
+
+    /// The action's wire-supplied actor (`GdprGuard::gdpr_actor`) does not
+    /// match the caller identity the auth layer above forge authenticated.
+    /// Forge refuses the action before `submit` so a wire-controlled actor
+    /// field cannot be substituted to attack a different user's scope
+    /// (closes the C3 actor-substitution bypass). `authenticated == None`
+    /// means the caller was unauthenticated / system but the action claims
+    /// a user-scoped actor — also a mismatch.
+    #[error(
+        "actor mismatch: action claims {claimed:?}, caller authenticated as {authenticated:?}"
+    )]
+    ActorMismatch {
+        /// Actor the action's wire payload claims to act as.
+        claimed: ActorId,
+        /// Actor the auth layer authenticated for this caller (`None` =
+        /// unauthenticated / system caller).
+        authenticated: Option<ActorId>,
+    },
 
     /// L2 admission gate rejected the action: the actor's backing user is
     /// in `GdprStatus::ErasurePending`, so the action is refused before it
@@ -123,11 +142,34 @@ impl RuntimeService {
         self.kernel.create_instance(config)
     }
 
-    /// Dispatch a forge action — run the L2 GDPR admission gate,
-    /// postcard-encode its canonical bytes, submit at tick `at`, then
-    /// step the kernel once with `caps`. Returns the kernel's
-    /// `StepReport` so the caller can inspect `actions_executed` /
-    /// `effects_applied` / `effects_denied`.
+    /// Dispatch a forge action — authenticate the actor against the caller,
+    /// run the L2 GDPR admission gate, postcard-encode its canonical bytes,
+    /// submit at tick `at`, then step the kernel once with `caps`. Returns
+    /// the kernel's `StepReport` so the caller can inspect `actions_executed`
+    /// / `effects_applied` / `effects_denied`.
+    ///
+    /// ## Caller authentication contract
+    ///
+    /// `authenticated_actor` is the caller identity the integrator's
+    /// auth / session layer (which sits ABOVE forge) has already verified —
+    /// e.g. resolved from a login session, bearer token, or passkey
+    /// assertion. `None` denotes a system / anonymous caller with no
+    /// authenticated actor.
+    ///
+    /// Forge does NOT resolve a kernel `Principal` to an
+    /// [`ActorId`] — that binding (`External(ExternalId)` ↔ `ActorId`)
+    /// belongs to the auth layer. What forge ENFORCES is the converse: a
+    /// user-scoped action (one whose [`GdprGuard::gdpr_actor`] returns
+    /// `Some`) carries a *wire-controlled* actor field
+    /// (`CreateSpace.config.creator`, `SubmitActivity.record.actor`, …).
+    /// Before any further processing, `dispatch` requires that claimed
+    /// actor to equal `authenticated_actor`; otherwise it rejects with
+    /// [`DispatchError::ActorMismatch`] before `submit`. This closes the
+    /// C3 actor-substitution bypass: an attacker can no longer set the
+    /// wire actor to a victim's `ActorId` and have forge treat the action
+    /// as that victim's. A non-user-scoped / system action
+    /// (`gdpr_actor() == None`) skips the check and ignores
+    /// `authenticated_actor`.
     ///
     /// ## GDPR `ErasurePending` admission gate (C3)
     ///
@@ -135,15 +177,25 @@ impl RuntimeService {
     /// [`ActionContext`] (see [`arkhe_forge_core::bridge`]), so the
     /// in-compute `ensure_actor_eligible` check soft-passes — it cannot
     /// read the actor's `UserBinding` / `UserProfile` without a bound
-    /// view. This method closes that gap at the L2 boundary: when the
-    /// action's [`GdprGuard::gdpr_actor`] returns `Some(actor)`, the
-    /// service binds a fresh `InstanceView`, runs the existing
-    /// `ensure_actor_eligible` logic, and REJECTS the action before
-    /// `submit` if the backing user is `ErasurePending`. An
-    /// erasure-pending action is never submitted and never reaches the WAL.
+    /// view. This method closes that gap at the L2 boundary: once the
+    /// actor-authentication check above has passed (so the actor is the
+    /// verified caller, not a wire substitution), the service binds a
+    /// fresh `InstanceView`, runs the existing `ensure_actor_eligible`
+    /// logic on that verified actor, and REJECTS the action before
+    /// `submit` if the backing user is `ErasurePending`. The gate is
+    /// SOUND — the actor it gates on is the authenticated caller, so
+    /// actor-substitution cannot bypass it. Its LIVENESS, however, depends
+    /// on a production path transitioning the profile to `ErasurePending`;
+    /// today none does — the L2 erasure cascade has no write channel into
+    /// the kernel-stored `UserProfile` — so the gate is sound-but-inert in
+    /// production (a tracked limitation). When the status IS set, the
+    /// action is rejected before `submit` (never reaches the WAL), as this
+    /// method's tests demonstrate.
     ///
     /// # Errors
     ///
+    /// * [`DispatchError::ActorMismatch`] — the action's wire actor does
+    ///   not match `authenticated_actor` (actor-substitution rejected).
     /// * [`DispatchError::ErasurePending`] — the L2 gate rejected the
     ///   action (backing user in `GdprStatus::ErasurePending`).
     /// * [`DispatchError::Kernel`] — kernel-side error from `submit`
@@ -157,22 +209,40 @@ impl RuntimeService {
         action: &A,
         at: Tick,
         caps: CapabilityMask,
+        authenticated_actor: Option<ActorId>,
     ) -> Result<StepReport, DispatchError>
     where
         A: Action + GdprGuard,
     {
-        // L2 admission gate (C3) — runs BEFORE submit, with the view
-        // dropped before the `&mut self.kernel` step call. Reuses the
-        // forge-core in-compute eligibility check; the probe context is
-        // read-only (zero world_seed, no Op emission).
-        if let Some(actor) = action.gdpr_actor() {
+        // Actor authentication — runs BEFORE the erasure gate so the gate
+        // only ever evaluates a caller-verified actor. A user-scoped
+        // action's wire actor (`gdpr_actor()`) must equal the actor the
+        // auth layer authenticated for this caller; otherwise the action
+        // is a substitution attempt and is refused before `submit`.
+        if let Some(claimed) = action.gdpr_actor() {
+            match authenticated_actor {
+                Some(auth) if auth == claimed => { /* authenticated as the claimed actor — proceed */
+                }
+                _ => {
+                    return Err(DispatchError::ActorMismatch {
+                        claimed,
+                        authenticated: authenticated_actor,
+                    })
+                }
+            }
+
+            // L2 admission gate (C3) — runs on the now-verified actor,
+            // BEFORE submit, with the view dropped before the
+            // `&mut self.kernel` step call. Reuses the forge-core in-compute
+            // eligibility check; the probe context is read-only (zero
+            // world_seed, no Op emission).
             let view = self
                 .kernel
                 .instance_view(instance)
                 .ok_or(ArkheError::InstanceNotFound)?;
             let probe = ActionContext::new([0u8; 32], instance, at, principal.clone(), caps)
                 .with_view(&view);
-            if let Err(err) = probe.ensure_actor_eligible(actor, at) {
+            if let Err(err) = probe.ensure_actor_eligible(claimed, at) {
                 return match err {
                     ActionError::UserErasurePending { user, .. } => {
                         Err(DispatchError::ErasurePending { user, tick: at })
@@ -284,6 +354,7 @@ mod tests {
             &NoopAction,
             Tick(1),
             CapabilityMask::SYSTEM,
+            None,
         );
         assert!(matches!(
             result,
@@ -324,6 +395,7 @@ mod tests {
                 &SpawnOne,
                 Tick(0),
                 CapabilityMask::SYSTEM,
+                None,
             )
             .expect("dispatch must succeed for live instance");
         assert_eq!(report.actions_executed, 1);
@@ -365,6 +437,7 @@ mod tests {
                 &SpawnOne,
                 Tick(0),
                 CapabilityMask::SYSTEM,
+                None,
             )
             .unwrap();
 
@@ -416,6 +489,7 @@ mod tests {
                 &SpawnAt(i),
                 Tick(i),
                 CapabilityMask::SYSTEM,
+                None,
             )
             .unwrap();
         }
@@ -530,17 +604,21 @@ mod tests {
             },
             Tick(1),
             CapabilityMask::SYSTEM,
+            None,
         )
         .expect("seed must succeed");
         let after_seed = svc.kernel.wal_record_count();
         assert_eq!(after_seed, Some(1), "seed action appends one record");
 
+        // Authenticated as actor 8 — passes the auth gate, then the
+        // erasure gate rejects because actor 8's user is ErasurePending.
         let rejected = svc.dispatch(
             inst,
             Principal::System,
             &create_space(ActorId::new(EntityId::new(8).unwrap())),
             Tick(2),
             CapabilityMask::SYSTEM,
+            Some(ActorId::new(EntityId::new(8).unwrap())),
         );
         match rejected {
             Err(DispatchError::ErasurePending { user, tick }) => {
@@ -570,6 +648,7 @@ mod tests {
             },
             Tick(1),
             CapabilityMask::SYSTEM,
+            None,
         )
         .expect("seed must succeed");
         let report = svc2
@@ -579,6 +658,7 @@ mod tests {
                 &create_space(ActorId::new(EntityId::new(8).unwrap())),
                 Tick(2),
                 CapabilityMask::SYSTEM,
+                Some(ActorId::new(EntityId::new(8).unwrap())),
             )
             .expect("Active user must proceed");
         assert_eq!(report.actions_executed, 1);
@@ -586,6 +666,137 @@ mod tests {
             svc2.kernel.wal_record_count(),
             Some(2),
             "Active-user action appends a second WAL record",
+        );
+    }
+
+    // ---------- #1 actor-authentication enforcement (HIGH fix) ----------
+
+    use arkhe_forge_core::actor::ActorId;
+    use arkhe_forge_core::brand::ShellId;
+    use arkhe_forge_core::component::BoundedString;
+    use arkhe_forge_core::space::{CreateSpace, SpaceConfig, SpaceKind, Visibility};
+    use arkhe_kernel::abi::EntityId;
+
+    /// Build a user-scoped `CreateSpace` whose wire actor (the C3 gate key)
+    /// is `creator`.
+    fn create_space_by(creator: ActorId) -> CreateSpace {
+        CreateSpace {
+            schema_version: 1,
+            config: SpaceConfig {
+                schema_version: 1,
+                shell_id: ShellId([0xC3; 16]),
+                slug: BoundedString::<32>::new("space").unwrap(),
+                kind: SpaceKind::Flat,
+                visibility: Visibility::Public,
+                creator,
+                parent_space: None,
+                created_tick: Tick(100),
+            },
+        }
+    }
+
+    fn actor(id: u64) -> ActorId {
+        ActorId::new(EntityId::new(id).unwrap())
+    }
+
+    /// A user-scoped action whose wire actor != the authenticated caller is
+    /// rejected with `ActorMismatch` and never reaches the WAL. This is the
+    /// actor-substitution attack the HIGH finding describes: the wire field
+    /// `config.creator` claims a victim actor while the caller is someone
+    /// else.
+    #[test]
+    fn dispatch_rejects_actor_substitution() {
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<CreateSpace>();
+        let inst = svc.create_instance(InstanceConfig::default());
+
+        // Wire claims actor 7 (victim); caller authenticated as actor 9.
+        let result = svc.dispatch(
+            inst,
+            Principal::System,
+            &create_space_by(actor(7)),
+            Tick(1),
+            CapabilityMask::SYSTEM,
+            Some(actor(9)),
+        );
+        match result {
+            Err(DispatchError::ActorMismatch {
+                claimed,
+                authenticated,
+            }) => {
+                assert_eq!(claimed, actor(7));
+                assert_eq!(authenticated, Some(actor(9)));
+            }
+            other => panic!("expected ActorMismatch, got {other:?}"),
+        }
+        assert_eq!(
+            svc.kernel.wal_record_count(),
+            Some(0),
+            "substituted-actor action must NOT be submitted",
+        );
+    }
+
+    /// A user-scoped action dispatched with no authenticated actor
+    /// (`authenticated_actor = None`, i.e. an unauthenticated / system
+    /// caller) is rejected — a user-scoped action requires an
+    /// authenticated caller equal to its claimed actor.
+    #[test]
+    fn dispatch_rejects_unauthenticated_user_action() {
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<CreateSpace>();
+        let inst = svc.create_instance(InstanceConfig::default());
+
+        let result = svc.dispatch(
+            inst,
+            Principal::System,
+            &create_space_by(actor(7)),
+            Tick(1),
+            CapabilityMask::SYSTEM,
+            None,
+        );
+        match result {
+            Err(DispatchError::ActorMismatch {
+                claimed,
+                authenticated,
+            }) => {
+                assert_eq!(claimed, actor(7));
+                assert_eq!(authenticated, None);
+            }
+            other => panic!("expected ActorMismatch, got {other:?}"),
+        }
+        assert_eq!(
+            svc.kernel.wal_record_count(),
+            Some(0),
+            "unauthenticated user-scoped action must NOT be submitted",
+        );
+    }
+
+    /// A user-scoped action whose wire actor equals the authenticated
+    /// caller passes the auth gate and (for an `Active` / unknown user)
+    /// proceeds to the WAL.
+    #[test]
+    fn dispatch_allows_matching_actor() {
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<CreateSpace>();
+        let inst = svc.create_instance(InstanceConfig::default());
+
+        // No `UserBinding` seeded → the erasure gate soft-passes (Ok(None)),
+        // so a matching actor proceeds.
+        let report = svc
+            .dispatch(
+                inst,
+                Principal::System,
+                &create_space_by(actor(7)),
+                Tick(1),
+                CapabilityMask::SYSTEM,
+                Some(actor(7)),
+            )
+            .expect("matching actor must proceed");
+        assert_eq!(report.actions_executed, 1);
+        assert_eq!(
+            svc.kernel.wal_record_count(),
+            Some(1),
+            "matching-actor action appends a WAL record",
         );
     }
 }

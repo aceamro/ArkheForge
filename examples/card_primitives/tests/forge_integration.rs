@@ -268,6 +268,8 @@ fn runtime_service_dispatch_wal_export_round_trip() {
             &action,
             Tick(1),
             CapabilityMask::SYSTEM,
+            // `RecordHandShowdown` is not user-scoped (default `GdprGuard`).
+            None,
         )
         .expect("dispatch must succeed");
     assert_eq!(report.actions_executed, 1, "single submit + step pair");
