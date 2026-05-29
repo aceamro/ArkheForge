@@ -38,11 +38,11 @@ pub enum HistoryLoadError {
     #[error("WAL framing: {0}")]
     Framing(#[from] arkhe_forge_platform::wal_export::WalExportError),
     /// Postcard rejected the framed payload (kernel `WalRecord` shape
-    /// mismatch — should never fire under the v0.13 wire pin).
+    /// mismatch — should never fire under the wire pin).
     #[error("WAL record decode: {0}")]
     WalRecordDecode(postcard::Error),
     /// Postcard rejected the embedded Action bytes (wire-shape skew
-    /// vs the v0.13 `RecordDiceRoll` schema).
+    /// vs the `RecordDiceRoll` schema).
     #[error("RecordDiceRoll decode: {0}")]
     ActionDecode(postcard::Error),
 }

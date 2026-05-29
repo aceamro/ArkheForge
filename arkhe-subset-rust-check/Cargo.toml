@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-subset-rust-check"
-version       = "0.13.0"
+version       = "0.14.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Lint helpers for ArkheForge Runtime: enforces Subset-Rust purity on Action::compute (clock / RNG / I/O / FFI deny-list). Backs the #[arkhe_pure] attribute macro per E14.L1."

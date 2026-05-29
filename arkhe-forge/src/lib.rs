@@ -14,4 +14,4 @@ pub use arkhe_forge_core as core;
 pub use arkhe_forge_platform as platform;
 
 /// Umbrella re-export semver.
-pub const SEMVER: (u16, u16, u16) = (0, 13, 0);
+pub const SEMVER: (u16, u16, u16) = (0, 14, 0);

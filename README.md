@@ -224,10 +224,10 @@ fetches both kernel crates from crates.io directly.
 
 ## Stability
 
-v0.13 — single fixed pre-public version, sibling-published with
-ArkheKernel. No version churn before external publish; subsequent
-corrections land on the same v0.13 line. Version 1.0 is intentionally
-never reached.
+v0.14 tracks the ArkheKernel v0.14 epoch (`ml-dsa` 0.1.0 / NIST FIPS 204
+final). A new minor epoch is cut only on a substantive trigger; there is
+no churn between epochs. Version 1.0 is intentionally never reached
+(parity with ArkheKernel).
 
 ## Documentation
 

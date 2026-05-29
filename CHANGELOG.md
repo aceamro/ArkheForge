@@ -1,9 +1,60 @@
 # Changelog
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
-Versioning scheme — v0.13 is a single fixed pre-public version.
-Subsequent corrections land on the same v0.13 line. Version 1.0 is
-intentionally never reached (parity with ArkheKernel).
+Versioning scheme — the version tracks the ArkheKernel epoch. A new
+minor epoch is cut on a substantive trigger (here: `ml-dsa` 0.1.0
+stabilisation → kernel v0.14). Version 1.0 is intentionally never
+reached (parity with ArkheKernel).
+
+## [0.14.0] — ml-dsa epoch: PQC receipts, plugin removal, hardening
+
+Tracks the ArkheKernel v0.14 epoch (`ml-dsa` 0.1.0 / NIST FIPS 204 final).
+Consumes `arkhe-kernel` / `arkhe-macros` 0.14; `ml-dsa` pinned at the
+stable `=0.1.0`.
+
+### Added
+- L2 post-quantum audit-receipt verification + signing
+  (`arkhe_forge_platform::verifier`). `verify_attestation` dispatches on
+  the policy-pinned class — None / Ed25519 (`verify_strict`) / ML-DSA-65
+  / Hybrid (AND-mode) — over a forge-receipt domain-separated message;
+  `verify_receipt_envelope` enforces algorithm↔slot coherence;
+  `ReceiptSigner` (ML-DSA-65, gated `tier-2-pqc-receipts`). Tier-2
+  crypto-erasure receipts are signed for real.
+- `AuditReceiptKeyPolicy` additive `attestation_pqc` slot (schema 2),
+  byte-identical to schema 1 for Ed25519/None receipts (forward-only).
+- Anchored journal verification (`InMemoryJournal::verify_chain_anchored`)
+  against a pinned out-of-band key + expected tip/length.
+
+### Removed
+- The wasm hook host v2 + observer host v2 plugin subsystem — the
+  `tier-2-hook-host-v2` / `tier-2-observer-host-v2` features, the
+  `wasmtime` / `wasmtime-wasi` dependencies (~98 transitive crates), and
+  the `HookModuleRegister` / `ObserverQuarantine` events. Dormant and
+  off-by-default; removed to shrink the security surface and dependency
+  weight. A permanent TypeCode gap is left at `0x0003_0F0B` / `0x0003_0F0C`.
+
+### Fixed
+- GDPR `ErasurePending` (C3) is now enforced at the `RuntimeService` L2
+  admission boundary; previously it soft-passed on the dispatch path
+  because the in-compute instance view is unbound.
+- DEK AES-256-GCM nonce reuse across reconstruction: long-lived
+  (KMS-unwrapped) DEKs now require nonce-misuse-resistant AES-256-GCM-SIV;
+  plain AES-256-GCM is rejected for them (`PiiError::NonceReuseRisk`).
+- Crypto-erasure attestations no longer label a BLAKE3 transparency
+  digest as an Ed25519 signature (now `RuntimeSignatureClass::None`).
+- `arkhe-rand` full-range `gen_range_inclusive` overflow (`u8`/`u16`
+  `MIN..=MAX`).
+- Manifest `audit.signature_class` is validated (unknown values rejected).
+
+### Changed
+- `arkhe-rand` KDF domain tag is now version-agnostic (`"arkhe-rand
+  stream"`, previously carried a `v0.13` suffix). PRNG streams therefore
+  differ from 0.13.0 for the same seed — a deliberate one-time change at
+  this epoch boundary; the golden vector is regenerated.
+
+### Licensing
+
+Dual-licensed under MIT OR Apache-2.0.
 
 ## [0.13.0] — Initial release
 

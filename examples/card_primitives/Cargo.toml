@@ -1,6 +1,6 @@
 [package]
 name          = "card-primitives"
-version       = "0.13.0"
+version       = "0.14.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Hold'em card primitives example — packed `Card` byte form, cursor-based `Deck` with Fisher-Yates shuffle, 9-category `HandRank` evaluator, BLAKE3 commit-reveal verifier, ArkheForge L1 Action/Event integration."
@@ -22,7 +22,7 @@ static_assertions = { workspace = true }
 # Path dep matches the workspace pattern shared by `arkhe-forge` /
 # `arkhe-forge-platform` — arkhe-rand is a workspace member, not yet
 # published, so a path-based resolution is required.
-arkhe-rand        = { path = "../../arkhe-rand", version = "0.13", default-features = false }
+arkhe-rand        = { path = "../../arkhe-rand", version = "0.14", default-features = false }
 blake3            = { workspace = true }
 zeroize           = { workspace = true }
 
@@ -32,7 +32,7 @@ zeroize           = { workspace = true }
 # be a top-level dep. Path dep matches the workspace pattern shared by
 # `arkhe-forge` / `arkhe-forge-platform` (see workspace `[workspace]`
 # members list).
-arkhe-forge-core  = { path = "../../arkhe-forge-core", version = "0.13" }
+arkhe-forge-core  = { path = "../../arkhe-forge-core", version = "0.14" }
 # Kernel ABI types (`Principal`, `Tick`, `InstanceId`, `CapabilityMask`)
 # consumed by `ActionContext::new`. Re-uses the existing
 # `[workspace.dependencies] arkhe-kernel = "0.14"` pin — no new
@@ -43,7 +43,7 @@ arkhe-kernel      = { workspace = true }
 # dispatch → WAL append loop; `BufferedWalSink` streams the kernel's
 # WAL records into a portable byte form for the demo's `wal_to_sink`
 # round-trip stage.
-arkhe-forge-platform = { path = "../../arkhe-forge-platform", version = "0.13" }
+arkhe-forge-platform = { path = "../../arkhe-forge-platform", version = "0.14" }
 
 [lints]
 workspace = true

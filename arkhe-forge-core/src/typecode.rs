@@ -118,7 +118,7 @@ mod tests {
 
     /// `ROOM_MARKER_RESERVED` lands in the Core Entity sub-range, next
     /// free after `ActivityMarker 0x0001_4001`
-    /// progression. v0.13 implementers must not collide.
+    /// progression. Implementers must not collide.
     #[test]
     fn room_marker_reserved_value_is_pinned() {
         assert_eq!(ROOM_MARKER_RESERVED, 0x0001_5001);
@@ -127,7 +127,7 @@ mod tests {
     /// Sealed-completeness mutual lock: the
     /// reserved slot must lie inside the Core Entity sub-range.
     /// Misallocation outside the range would silently break the
-    /// `EntityKind` v0.13 implementation surface.
+    /// `EntityKind` implementation surface.
     #[test]
     fn room_marker_reserved_lands_in_core_entity_subrange() {
         let (lo, hi) = CORE_ENTITY;

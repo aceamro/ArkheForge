@@ -207,9 +207,9 @@ mod tests {
         // Bridge is a pure function: same `(action, instance_id, tick)`
         // → byte-identical drained `Vec<Op>`. This is the consumer-side
         // proof of A1 D1-Total replay determinism through the bridge.
-        // `arkhe_kernel::state::Op` does not implement `PartialEq` in
-        // v0.13, so equality is asserted on the postcard-encoded form
-        // (which is what the kernel hashes into the WAL chain anyway).
+        // `arkhe_kernel::state::Op` does not implement `PartialEq`, so
+        // equality is asserted on the postcard-encoded form (which is
+        // what the kernel hashes into the WAL chain anyway).
         let (iid, tick) = fixture_args();
         let action = GdprEraseUser {
             schema_version: 1,
