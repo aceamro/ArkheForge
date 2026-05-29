@@ -4,13 +4,28 @@
 //!
 //! ```text
 //! Kernel::step → WAL records → BufferedWalSink → byte stream
-//!     → parse_stream (consumer-side reconstruction) → Wal::verify_chain
+//!     → parse_stream (consumer-side reconstruction)
+//!     → Wal::verify_chain_anchored (trust-anchored consumer check)
 //! ```
+//!
+//! ## Threat model — anchored verification
+//!
+//! Under an untrusted-producer threat model the consumer pins
+//! `world_id`, `manifest_digest`, and the expected chain tip out-of-band
+//! through a [`TrustAnchor`](arkhe_kernel::persist::TrustAnchor) and calls
+//! `Wal::verify_chain_anchored`, rather than `Wal::verify_chain` (which
+//! proves chain self-consistency only). These test WALs are built with
+//! `SignatureClass::None` (`SignatureTier::None`), so the anchor pins
+//! chain-tip + manifest_digest; FULL producer authenticity — rejecting an
+//! attacker who rebuilds the chain under their own keypair — requires a
+//! SIGNED WAL with `min_tier: Some(SignatureTier::Ed25519)` (or `Hybrid`)
+//! and a pinned verifying key, which an unsigned WAL cannot carry.
 //!
 //! Six integration coverage areas:
 //!
 //! 1. **consumer-side replay verification** — chain integrity preserved
-//!    through round-trip (`round_trip_real_wal_records_verify_chain`).
+//!    through round-trip, asserted via the trust-anchored
+//!    `verify_chain_anchored` (`round_trip_real_wal_records_verify_chain`).
 //! 2. **stream `ARKHEXP1` + invalid prefix bytes reject scenarios** —
 //!    `parse_stream` rejects malformed framing with the correct
 //!    [`InvalidFramingReason`] variant.
@@ -35,7 +50,7 @@ mod tests {
     };
     use arkhe_forge_core::arkhe_pure;
     use arkhe_kernel::abi::{CapabilityMask, Principal, Tick};
-    use arkhe_kernel::persist::{Wal, WalRecord};
+    use arkhe_kernel::persist::{SignatureTier, TrustAnchor, Wal, WalRecord};
     use arkhe_kernel::state::{
         Action, ActionCompute, ActionContext, ActionDeriv, InstanceConfig, Op,
     };
@@ -181,15 +196,41 @@ mod tests {
     // -------------------------------------------------------------------
 
     /// Stream a real Kernel-driven WAL through the sink, parse it back,
-    /// and confirm `Wal::verify_chain` still passes.
-    /// Demonstrates end-to-end chain integrity preservation through the
-    /// streaming export pipeline.
+    /// and confirm the reconstructed WAL passes the TRUST-ANCHORED check.
+    ///
+    /// Under the untrusted-producer threat model the consumer must not
+    /// trust values read from the (potentially tampered) header: it pins
+    /// `world_id`, `manifest_digest`, and the expected chain tip
+    /// out-of-band via [`TrustAnchor`]. `verify_chain` alone only proves
+    /// chain self-consistency; `verify_chain_anchored` additionally pins
+    /// the manifest digest (A14) and rejects a tail truncation.
+    ///
+    /// NOTE: these test WALs are built with `SignatureClass::None`
+    /// (`Kernel::new_with_wal`), i.e. `SignatureTier::None` — the anchor
+    /// here pins chain-tip + manifest_digest only. Full producer
+    /// authenticity (rejecting an attacker who re-builds the chain under
+    /// their own keypair) requires a SIGNED WAL plus
+    /// `min_tier: Some(SignatureTier::Ed25519)` (or `Hybrid`) and a pinned
+    /// `ed25519_verifying_key`; an unsigned WAL cannot carry that proof.
     #[test]
     fn round_trip_real_wal_records_verify_chain() {
         let original = build_wal_with_records(5);
+        let expected_tip = original.chain_tip();
+
+        // The anchor a consumer pins out-of-band. `min_tier: None` floor is
+        // the strongest tier an unsigned WAL can satisfy; tip + manifest are
+        // the producer-independent integrity pins available without signing.
+        let anchor = TrustAnchor {
+            min_tier: Some(SignatureTier::None),
+            ed25519_verifying_key: None,
+            mldsa_verifying_key: None,
+            expected_manifest_digest: Some(MANIFEST_DIGEST),
+            expected_chain_tip: Some(expected_tip),
+        };
+
         original
-            .verify_chain(WORLD_ID)
-            .expect("baseline WAL chain valid");
+            .verify_chain_anchored(WORLD_ID, &anchor)
+            .expect("baseline WAL passes anchored verify");
 
         let stream = export_records_to_stream(&original.records);
         let parsed = parse_stream(&stream).expect("parse OK");
@@ -201,8 +242,8 @@ mod tests {
 
         let reconstructed = reconstruct_wal(original.header.clone(), parsed);
         reconstructed
-            .verify_chain(WORLD_ID)
-            .expect("round-trip WAL chain still valid");
+            .verify_chain_anchored(WORLD_ID, &anchor)
+            .expect("round-trip WAL passes anchored verify (tip + manifest pinned)");
     }
 
     /// Reconstructed records equal originals byte-for-byte (postcard
