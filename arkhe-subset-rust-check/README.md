@@ -73,9 +73,8 @@ assert!(violations[0].denied_path.contains("Instant::now"));
 ## Spec anchor
 
 - E14 Compute Determinism Closure (MC) — Runtime axiom layer.
-- **`Policy::deny_compute_impurity` ↔ E14.L1-Deny** (spec canonical name).
-- **WASM capability table ↔ E14.L2-Allow** (Hook host v2 wasmtime sandbox,
-  paired enforcement of the E14 determinism contract).
+- **`Policy::deny_compute_impurity` ↔ E14.L1-Deny** (spec canonical name) —
+  the build-time AST deny-list this crate enforces.
 - Pair crate: `arkhe-trait-default-check` (default-body fingerprint).
 
 ## Documentation

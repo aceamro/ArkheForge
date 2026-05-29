@@ -1,23 +1,22 @@
 # ArkheForge
 
-**Sandboxed L1+L2 runtime substrate for [ArkheKernel](https://github.com/aceamro/ArkheKernel) — WASM hook host, KMS-tier crypto, sealed observer pipeline.**
+**L1+L2 runtime substrate for [ArkheKernel](https://github.com/aceamro/ArkheKernel) — KMS-tier crypto, observer pipeline.**
 
 [Changelog](CHANGELOG.md) · [License](#license)
 
 
 A1 D1-Total bit-identical replay carries through from sealed L0 ArkheKernel
 to the runtime boundary. 3-band determinism (Core / Projection / Protocol-
-Correctness) layers on top, the L0 kernel's Hybrid Ed25519 + ML-DSA 65 WAL
-chain signing is inherited unchanged, and a WASM-sandboxed hook host with
-a Kani-verified host-fn boundary makes ArkheForge a production runtime
-stack for shell authors (BBS, game, social platform) building on a sealed
-deterministic substrate. Forge L2 attestation surfaces (KMS journal,
+Correctness) layers on top, and the L0 kernel's Hybrid Ed25519 + ML-DSA 65
+WAL chain signing is inherited unchanged, making ArkheForge a production
+runtime stack for shell authors (BBS, game, social platform) building on a
+sealed deterministic substrate. Forge L2 attestation surfaces (KMS journal,
 audit receipts, manifest declaration) emit Ed25519.
 
 ## Quick start
 
 ArkheForge composes on top of ArkheKernel — the kernel surface is your
-primary API, and forge L2 features (WASM hosts, KMS backends) layer on
+primary API, and forge L2 features (KMS backends) layer on
 top via Cargo feature flags:
 
 ```rust
@@ -41,12 +40,10 @@ kernel.submit(/* ... */).unwrap();
 let report = kernel.step(Tick(0), CapabilityMask::SYSTEM);
 ```
 
-Production deployments add the forge L2 sandbox via Cargo feature flags:
+Production deployments add the forge L2 KMS stack via Cargo feature flags:
 
 | Feature                    | Adds                                                  |
 | :---                       | :---                                                  |
-| `tier-2-observer-host-v2`  | `WasmtimeObserverHost::with_deterministic_replay_config()` (WASM) |
-| `tier-2-hook-host-v2`      | `WasmtimeHookHost` (WASM hook host)                   |
 | `tier-1-kms`               | `argon2` + `chacha20poly1305` (Tier-1 AEAD)           |
 | `tier-2-multi-kms`         | `aes-gcm` + `aes-gcm-siv` (Tier-2 AEAD)               |
 | `tier-2-aws-kms`           | `aws-sdk-kms` + `aws-config` (AWS KMS backend)        |
@@ -72,14 +69,10 @@ showdown is written to a WAL file" with audit-grade integrity.
   pipeline) and *Protocol-Correctness* (shell-level compatibility
   contracts) are explicit bands with separate guarantees and separate
   verification surfaces.
-- **Sandboxed hook + observer hosts.** Hook host v2 and observer host v2
-  run hosted code under WASM preview-2 with capability gating, fuel
-  budgets, and a Kani-verified host-fn boundary (`memory_bounds_check`
-  property). External impls cannot cross the sealed seam.
 - **Crypto-erasure with cryptographic shred guarantees.** HSM-generated
   DEK + envelope encryption + tombstone semantics + multi-region 2PC
   atomic shred. GDPR-aligned erasure in a deterministic-replay world.
-- **Formal verification anchored.** A 5-property Kani harness suite
+- **Formal verification anchored.** A 4-property Kani harness suite
   lives here (`arkhe-runtime-proofs/`), six TLA+ refinement modules
   span the platform (four in sibling ArkheKernel + two here), and the
   sibling kernel CI runs Apalache typecheck on `cr1`–`cr4` every push.
@@ -95,9 +88,9 @@ showdown is written to a WAL file" with audit-grade integrity.
 
 ```text
 +----------------------------------------+
-|  L2 platform   hook host v2 (WASM),    |  capability linker, KMS
-|                observer host v2,       |  abstractions, AEAD tiers,
-|                sandbox safeguards      |  AWS / multi-KMS backends
+|  L2 platform   capability linker,      |  capability linker, KMS
+|                KMS abstractions,       |  abstractions, AEAD tiers,
+|                AEAD tiers              |  AWS / multi-KMS backends
 +------------------^---------------------+
                    |
 +------------------+---------------------+
@@ -124,7 +117,7 @@ Eleven crates total — 10 workspace members + 1 standalone Kani harness:
 | :---                           | :---        | :---                                       |
 | `arkhe-forge`                  | L1+L2       | Umbrella re-export for shell authors       |
 | `arkhe-forge-core`             | L1          | Runtime traits, dispatch, observer pipeline|
-| `arkhe-forge-platform`         | L2          | Hook host v2, observer host v2, KMS, AEAD  |
+| `arkhe-forge-platform`         | L2          | Capability linker, KMS, AEAD               |
 | `arkhe-forge-macros`           | L1          | Derive macros for forge components         |
 | `arkhe-rand`                   | L3          | BLAKE3-keyed PRNG (no_std), shell-side use |
 | `arkhe-runtime-testkit`        | dev         | proptest harness for runtime crates        |
@@ -132,45 +125,23 @@ Eleven crates total — 10 workspace members + 1 standalone Kani harness:
 | `arkhe-subset-rust-check`      | CI          | `Action::compute()` determinism subset lint|
 | `card-primitives`              | examples/   | Provably-fair Hold'em 9-stage demo (card / deck / hand_eval / shuffle_proof / forge_integration / main + Forge L2 `RuntimeService` dispatch + WAL export + streaming round-trip) + GLI-19 §3.2.5 RNG bias compliance (Lemire via `arkhe-rand`) + NIST SP 800-22 14-test + Forge L1 `ArkheAction`/`ArkheEvent` + Forge L2 `Kernel::submit`/`step` end-to-end reference integration |
 | `dice`                         | examples/   | Provably-fair 3D6 dice demo — server commit + interactive user-seed combined PRF + arkhe-rand `RngSource` + Forge L1+L2 dispatch + `BufferedWalSink` persistence with chronological multi-run history (`dice.wal` rewritten each launch, top-5 display) + `--reset`/`--verify` CLI |
-| `arkhe-runtime-proofs`         | proof       | Kani 5-property harness (standalone)       |
+| `arkhe-runtime-proofs`         | proof       | Kani 4-property harness (standalone)       |
 
 ## Determinism guarantees
 
 - **E14 Compute Determinism Closure** — `Action::compute()` is pure in
-  its declared inputs (build-time dylint + runtime sandbox dual-tier
-  enforcement).
+  its declared inputs (build-time deny-list enforcement on the
+  clock / RNG / I/O / FFI surface).
 - **E13 PQC Hybrid AND-mode dispatch** — both Ed25519 and ML-DSA 65
   signatures must verify for any record signed under the Hybrid
   policy.
-- **E15 Observer Capability Confinement** — observer code cannot
-  affect the WAL chain hash. Sandbox traps panic before side-effects
-  propagate (E15.a) and the cap-token universe is sealed via
-  type-system anchors (E15.b: `HookCapTokenSealed`,
-  `ObserverCapTokenSealed`).
 
-Full E1–E15 catalog (15 distinct E-axioms across 17 enforcement slots:
-12 machine-checked + 5 non-MC; `E7` and `E14` are dual-tier) lives in
+Full E1–E14 catalog (14 distinct E-axioms across 16 enforcement slots:
+11 machine-checked + 5 non-MC; `E7` is dual-tier) lives in
 the source rustdoc — see
 [`arkhe-runtime-proofs`](arkhe-runtime-proofs/) for the per-axiom Kani
 proofs and the `E*` cites under
 [`arkhe-forge-core`](arkhe-forge-core/).
-
-## Sandbox & sealed seam
-
-ArkheForge applies the sealed-trait pattern (`private_seal::Sealed`
-bound — sibling of kernel A24 lineage) consistently across the
-host-extension surface:
-
-- `capability_linker` — bridges kernel cap mask to platform host imports
-- `hook_host_v2` — sealed bound on the hosted-fn import set
-- `observer_host_v2` — sealed bound on the observer cap-token universe
-- `cap_token` — `HookCapTokenSealed` + `ObserverCapTokenSealed` (E15.b)
-- `SealedHostImport` — host-fn wrapper that prevents external impls
-  from widening the import allow-list at compile time
-
-These five sealed seams together produce the host-import + cap-token
-universe that the Kani `kani_authorize_property` and
-`kani_memory_bounds_check_property` harnesses verify.
 
 ## Crypto stack
 
@@ -204,14 +175,14 @@ sketched in `arkhe-forge-platform::hf2_kms`.
 
 ## Formal verification
 
-- **4-tier enforcement** — 12 machine-checked (TLA+ + Kani) + 3
-  type-proven + 1 type-adjacent + 1 runtime-asserted = 17 enforcement
-  slots for 15 distinct E-axioms (`E7` and `E14` are dual-tier). See
+- **4-tier enforcement** — 11 machine-checked (TLA+ + Kani) + 3
+  type-proven + 1 type-adjacent + 1 runtime-asserted = 16 enforcement
+  slots for 14 distinct E-axioms (`E7` is dual-tier). See
   the source rustdoc in
   [`arkhe-runtime-proofs`](arkhe-runtime-proofs/) for the per-axiom
   Kani breakdown. Kernel
   L0 axioms (A1–A24 + S1) are tagged across a parallel 5-tier scheme
-  (25 slots); combined with forge they form 42 total enforcement
+  (25 slots); combined with forge they form 41 total enforcement
   slots.
 - **TLA+ refinement (six modules across the platform)** — `cr1` chain
   hash invariant, `cr2` state-machine refinement, `cr3` replay
@@ -219,12 +190,11 @@ sketched in `arkhe-forge-platform::hf2_kms`.
   sibling [`ArkheKernel`](https://github.com/aceamro/ArkheKernel)
   repository; `runtime_core` and `r4_implementation_refinement` live
   in [`formal/tla-plus/`](formal/tla-plus/) here.
-- **Kani harness suite (5 properties)** — implementation-level proofs
+- **Kani harness suite (4 properties)** — implementation-level proofs
   in [`arkhe-runtime-proofs/`](arkhe-runtime-proofs/):
   - `kani_authorize_property` → E6 / E7 typestate
   - `kani_dispatch_property` → E14 Compute Determinism
   - `kani_replay_property` → A1 bit-identical replay
-  - `kani_memory_bounds_check_property` → E14.L2 host-fn boundary
   - `kani_hybrid_and_mode_property` → E13 Hybrid AND-mode
 - **Apalache typecheck CI gate** — `cr1`–`cr4` are typechecked on
   every push by the sibling ArkheKernel CI.
@@ -274,4 +244,4 @@ at your option. Contributions are accepted under the same dual-license
 terms.
 
 ---
-*ArkheForge — a sandboxed runtime substrate for byte-identical worlds.*
+*ArkheForge — a deterministic runtime substrate for byte-identical worlds.*

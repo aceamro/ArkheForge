@@ -5,21 +5,6 @@
 //! breaking calls — clock / RNG / I/O / FFI — and bans `unsafe` blocks
 //! inside the scanned function. Returns a list of [`PurityViolation`]s.
 //!
-//! ## Cross-link to E14.L2-Allow (cryptographer naming convention)
-//!
-//! Spec body terminology (cryptographer cross-review):
-//!
-//! - **E14.L1-Deny** — build-time AST deny-list (this crate).
-//! - **E14.L2-Allow** — runtime host-import allow-list (WASM capability
-//!   table, `arkhe:hook/{state, emit, fuel, ...}`). The L2 allow-list is
-//!   the inverse of this L1 deny-list — compute-internal → external
-//!   communication has exactly one channel (the host imports).
-//!
-//! The two layers paired is the **dual enforcement of E14 determinism
-//! contract** — non-deterministic *inputs* are rejected at L1
-//! (clock / RNG / I/O / FFI / threading), non-deterministic *operations*
-//! at L2 (FP / SIMD / wasm-side threading).
-//!
 //! ## Crate shape
 //!
 //! Mirrors the `arkhe-trait-default-check` precedent: a syn-based lib

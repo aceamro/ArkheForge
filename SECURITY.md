@@ -2,10 +2,9 @@
 
 ArkheForge is the L1+L2 runtime substrate built on the ArkheKernel L0
 deterministic microkernel. Cryptographic surfaces include the L2
-dispatch + WAL append loop, the multi-tier KMS / AEAD stack, the
-wasmtime-sandboxed hook and observer hosts, and the audit attestation
-pipeline. Vulnerabilities affecting any of these surfaces are treated
-as security issues.
+dispatch + WAL append loop, the multi-tier KMS / AEAD stack, and the
+audit attestation pipeline. Vulnerabilities affecting any of these
+surfaces are treated as security issues.
 
 ## Reporting a vulnerability
 
@@ -33,9 +32,9 @@ discussion thread for an unfixed vulnerability.
 - **Acknowledgement**: within 5 business days.
 - **Triage**: within 14 days the report is either confirmed, declined,
   or marked needing-more-info.
-- **Fix window**: severity- and surface-dependent. Sandbox escapes,
-  capability bypasses, KMS-tier AEAD downgrades, WAL chain-integrity
-  breaks, sealed-trait escapes, replay non-determinism, and signature
+- **Fix window**: severity- and surface-dependent. Capability
+  bypasses, KMS-tier AEAD downgrades, WAL chain-integrity breaks,
+  sealed-trait escapes, replay non-determinism, and signature
   forgeries are prioritised. Coordinated public disclosure is agreed
   with the reporter once a fix is ready.
 
