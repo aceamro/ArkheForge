@@ -2,7 +2,7 @@
 # Implementation-level proof crate for the L1 Action submit / dispatch
 # / replay path. Ships a 4-property Kani harness suite:
 # `kani_authorize_property` / `kani_dispatch_property` /
-# `kani_replay_property` / `kani_memory_bounds_check_property`.
+# `kani_replay_property` / `kani_hybrid_and_mode_property`.
 #
 # **Standalone workspace** — Linus single-path: the empty `[workspace]`
 # table below makes this crate its own workspace, opting out of the

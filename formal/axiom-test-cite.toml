@@ -222,43 +222,35 @@ silent_ast_risk = "canonical bytes mutation = potential A1 bit-identical replay 
 mitigation = "byte-identity witness via component_canonical_bytes_pinned + event_canonical_bytes_pinned in arkhe-kernel/tests/derive_macros.rs (postcard wire bytes pinned for ArkheComponent + ArkheEvent derive emission)"
 
 # ============================================================
-# Kani 5-property suite
+# Kani 4-property suite
 # ============================================================
-[kani_5_property]
+[kani_4_property]
 description = "Implementation-level proof suite (TLA+ refinement complement)"
 location = "arkhe-runtime-proofs/src/lib.rs"
 workspace = "standalone (excluded from root workspace)"
 
-[kani_5_property.kani_authorize_property]
+[kani_4_property.kani_authorize_property]
 axiom = "E6 + E7 typestate"
 tla_anchor = "AuthenticatedActorHasUserBinding + ShellBrandConsistent"
 tla_module = "../ArkheKernel/formal/tla-plus/cr2_state_machine_refinement.tla"
 abstract_model = "authorize_model"
 property_statement = "actor authenticated AND shell brand match"
 
-[kani_5_property.kani_dispatch_property]
+[kani_4_property.kani_dispatch_property]
 axiom = "E14 Compute Determinism"
 tla_anchor = "ChainHashDeterministic"
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
 abstract_model = "dispatch_model"
 property_statement = "twice-dispatch determinism (same input ⇒ same output)"
 
-[kani_5_property.kani_replay_property]
+[kani_4_property.kani_replay_property]
 axiom = "A1 bit-identical replay (E14 ⇒ A1)"
 tla_anchor = "ChainHashDeterministic"
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
 abstract_model = "replay_model"
 property_statement = "twice-fold determinism on 3-event window"
 
-[kani_5_property.kani_memory_bounds_check_property]
-axiom = "E14.L2 (firm contract anchor)"
-tla_anchor = "ChainHashDeterministic (runtime sandbox boundary)"
-tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
-abstract_model = "memory_bounds_model"
-property_statement = "OOB rejection sound on (offset, len) symbolic input"
-note = "Overflow branch structurally unreachable under bounded MC"
-
-[kani_5_property.kani_hybrid_and_mode_property]
+[kani_4_property.kani_hybrid_and_mode_property]
 axiom = "E13 Hybrid AND-mode dispatch"
 tla_anchor = "HybridDualSignBoth + NoPqcDowngradeAttack"
 tla_module = "../ArkheKernel/formal/tla-plus/cr3_replay_determinism.tla"
@@ -275,7 +267,7 @@ formal_modules = 6
 tla_invs = 11
 tla_theorems = 1
 tla_lemmas = 0
-kani_properties = 5
+kani_properties = 4
 adversary_axes_closed = 3
 e_axioms_anchored = 11
 non_anchored_e_axioms = ["E1 (definitional)", "E2 (subsumed by E14)", "E10 (TYPE-ADJACENT)"]

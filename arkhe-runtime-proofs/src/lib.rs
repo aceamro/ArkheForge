@@ -7,7 +7,7 @@
 //! via `cargo kani` from inside this directory, with the Kani-bundled
 //! Rust toolchain (nightly per `rust-toolchain.toml`).
 //!
-//! ## 5-property suite
+//! ## 4-property suite
 //!
 //! 1. `kani_authorize_property` — E6/E7 typestate (`Actor<_, Authenticated>`
 //!    + dual-tier shell brand). N=4 shell brands × M=2 typestate variants
@@ -16,10 +16,7 @@
 //!    dispatch determinism (same input ⇒ identical event sequence).
 //! 3. `kani_replay_property` — A1 bit-identical replay, chain-tip
 //!    invariance under same-order event replay (k=3 event window).
-//! 4. `kani_memory_bounds_check_property` — wasm memory firm contract
-//!    anchor (`read_caller_memory` / `write_caller_memory` symbolic OOB
-//!    upper-bound proof).
-//! 5. `kani_hybrid_and_mode_property` — PQC Hybrid AND-mode dispatch
+//! 4. `kani_hybrid_and_mode_property` — PQC Hybrid AND-mode dispatch
 //!    logic. Mock BOOLEAN verify outcomes (NOT actual ML-DSA crypto
 //!    correctness — covered by integration tests in
 //!    `arkhe-kernel/src/persist/wal.rs::tests`). Verify scope:
@@ -38,7 +35,7 @@
 //! - SMT solver scales better with simpler models (Kani 0.67.0 + CBMC
 //!   backend, depth bounded at 8 per `#[kani::unwind]`).
 //! - Property structure (typestate gating, deterministic compute,
-//!   replay invariance, bounds check) is the focus, not implementation
+//!   replay invariance) is the focus, not implementation
 //!   specifics.
 //! - Implementation defects covered by integration tests in `arkhe-
 //!   forge-*` crates + invariant tests + TLA+ refinement (`formal/
@@ -69,7 +66,7 @@
 // toolchain activates the cfg via `cargo kani` invocation.
 
 // ============================================================
-// Property 1 of 5: kani_authorize_property (E6 + E7 typestate)
+// Property 1 of 4: kani_authorize_property (E6 + E7 typestate)
 // ============================================================
 
 #[cfg(kani)]
@@ -162,7 +159,7 @@ fn kani_authorize_property() {
 }
 
 // ============================================================
-// Property 2 of 5: kani_dispatch_property (E14 determinism)
+// Property 2 of 4: kani_dispatch_property (E14 determinism)
 // ============================================================
 
 #[cfg(kani)]
@@ -171,10 +168,9 @@ mod dispatch_model {
     //!
     //! E14: Compute Determinism Closure — every L1 `Action::compute` path
     //! contributing to the L0 chain hash produces bit-identical output
-    //! across replay on any conformant Runtime instance. L1-Deny (build-
-    //! time AST deny-list: clock / RNG / I/O / FFI / `unsafe`) + L2-Allow
-    //! (runtime wasmtime sandbox: NaN canonicalisation + SIMD opt-out)
-    //! dual realisation eliminates non-determinism.
+    //! across replay on any conformant Runtime instance. The L1-Deny
+    //! build-time AST deny-list (clock / RNG / I/O / FFI / `unsafe`)
+    //! eliminates non-deterministic inputs.
     //!
     //! Abstract model: `dispatch(input)` is a pure function that emits
     //! a fixed-size event sequence. Twice-dispatch determinism = same
@@ -228,7 +224,7 @@ fn kani_dispatch_property() {
 }
 
 // ============================================================
-// Property 3 of 5: kani_replay_property (A1 bit-identical)
+// Property 3 of 4: kani_replay_property (A1 bit-identical)
 // ============================================================
 
 #[cfg(kani)]
@@ -300,128 +296,7 @@ fn kani_replay_property() {
 }
 
 // ============================================================
-// Property 4 of 5: kani_memory_bounds_check_property
-//                  (wasm memory firm contract anchor)
-// ============================================================
-
-#[cfg(kani)]
-mod memory_bounds_model {
-    //! wasm memory bounds-check firm contract anchor abstract model.
-    //!
-    //! `read_caller_memory(buffer, offset, len)` and
-    //! `write_caller_memory(buffer, offset, len, src)` are wasmtime
-    //! host-fn helpers in `arkhe-forge-platform/src/wasm_runtime_common/
-    //! wasm_memory.rs`. The contract requires the bounds check to
-    //! reject OOB inputs (`offset + len > buffer.len()` or
-    //! `offset.checked_add(len)` overflow) with an explicit error
-    //! before any deref occurs.
-    //!
-    //! Abstract model: bounded buffer + checked_add overflow detection
-    //! + explicit upper-bound check. Kani symbolic execution explores
-    //! the full input domain to verify the bounds check is sound for
-    //! all `(offset, len)` pairs.
-
-    /// Maximum buffer size for the abstract Kani model.
-    pub const MAX_BUFFER_SIZE: usize = 16;
-
-    /// Error returned by `read_caller_memory` on OOB input.
-    #[derive(Clone, Copy, Eq, PartialEq)]
-    pub enum MemoryError {
-        Overflow,
-        OutOfBounds,
-    }
-
-    /// Validate `(offset, len)` against `buffer`.
-    ///
-    /// - Returns `Err(Overflow)` if `offset + len` overflows usize.
-    /// - Returns `Err(OutOfBounds)` if `offset + len > buffer.len()`.
-    /// - Returns `Ok(())` on successful bounds check.
-    ///
-    /// The function does not actually dereference — the bounds check
-    /// is the firm contract anchor under verification. Concrete impl
-    /// in `arkhe-forge-platform/src/wasm_runtime_common/wasm_memory.rs`
-    /// dereferences the wasm linear memory after this check passes.
-    pub fn read_caller_memory(
-        _buffer: &[u8; MAX_BUFFER_SIZE],
-        offset: usize,
-        len: usize,
-    ) -> Result<(), MemoryError> {
-        let end = match offset.checked_add(len) {
-            Some(end) => end,
-            None => return Err(MemoryError::Overflow),
-        };
-        if end > MAX_BUFFER_SIZE {
-            return Err(MemoryError::OutOfBounds);
-        }
-        Ok(())
-    }
-}
-
-/// Memory bounds-check property (wasm memory firm contract anchor).
-///
-/// **Property statement**: For all symbolic `(offset, len)` inputs in
-/// the bounded domain `[0, 2 * MAX_BUFFER_SIZE]`:
-/// - If `offset + len` overflows usize → `Err(Overflow)`
-/// - Else if `offset + len > MAX_BUFFER_SIZE` → `Err(OutOfBounds)`
-/// - Else → `Ok(())`
-///
-/// **Bounded MC**: `offset + len ≤ 2 * MAX_BUFFER_SIZE` symbolic domain
-/// (covers in-bounds, just-OOB, and far-OOB regions). SMT unwind = 8.
-///
-/// **Anchor**: wasm memory firm contract anchor — `read_caller_memory`
-/// and `write_caller_memory` symbolic OOB upper-bound proof. The
-/// formal-verification counterpart to integration tests in
-/// `arkhe-forge-platform/src/wasm_runtime_common/wasm_memory.rs`.
-///
-/// **Note on Overflow branch unreachability**:
-/// `kani::assume(offset ≤ 32 AND len ≤ 32)` keeps
-/// `checked_add(offset, len) ≤ 64`, far below `usize::MAX` (~1.8e19 on
-/// 64-bit). Therefore the `Err(Overflow)` branch is structurally
-/// unreachable under bounded MC — verification scope focuses on the
-/// in-bounds and OOB partition (the firm contract anchor's primary
-/// surface). The `checked_add` call retains its defensive design
-/// against attacker-controlled `usize::MAX/2` inputs in production;
-/// bounded MC abstracts to an SMT-tractable input domain.
-#[cfg(kani)]
-#[kani::proof]
-#[kani::unwind(8)]
-fn kani_memory_bounds_check_property() {
-    use memory_bounds_model::{
-        read_caller_memory, MemoryError, MAX_BUFFER_SIZE,
-    };
-
-    // Symbolic buffer
-    let buffer: [u8; MAX_BUFFER_SIZE] = kani::any();
-
-    // Symbolic offset + len, bounded to keep symbolic input domain
-    // finite (covers in-bounds, just-OOB, and far-OOB regions).
-    let offset: usize = kani::any();
-    let len: usize = kani::any();
-    kani::assume(offset <= 2 * MAX_BUFFER_SIZE);
-    kani::assume(len <= 2 * MAX_BUFFER_SIZE);
-
-    let result = read_caller_memory(&buffer, offset, len);
-
-    // Property: bounds check is sound under all symbolic inputs.
-    match offset.checked_add(len) {
-        None => {
-            // Overflow case: must return Err(Overflow)
-            assert!(matches!(result, Err(MemoryError::Overflow)));
-        }
-        Some(end) => {
-            if end > MAX_BUFFER_SIZE {
-                // OOB case: must return Err(OutOfBounds)
-                assert!(matches!(result, Err(MemoryError::OutOfBounds)));
-            } else {
-                // In-bounds case: must return Ok
-                assert!(matches!(result, Ok(())));
-            }
-        }
-    }
-}
-
-// ============================================================
-// Property 5 of 5: kani_hybrid_and_mode_property (PQC Hybrid AND-mode)
+// Property 4 of 4: kani_hybrid_and_mode_property (PQC Hybrid AND-mode)
 // ============================================================
 
 #[cfg(kani)]

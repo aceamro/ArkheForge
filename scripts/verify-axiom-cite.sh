@@ -102,7 +102,7 @@ def iter_axioms():
     # Non-axiom sections to skip at the top level
     skip = {
         "meta",
-        "kani_5_property",
+        "kani_4_property",
         "layer_a_items",
         "layer_a_item_3",
         "formal_verification_inventory",
