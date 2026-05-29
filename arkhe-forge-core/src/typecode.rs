@@ -87,17 +87,6 @@ pub mod core_event {
     pub const DEK_MIGRATION_COMPLETED: u32 = 0x0003_0F09;
     /// `ComplianceTierChange` — Tier-{0,1,2} transition record.
     pub const COMPLIANCE_TIER_CHANGE: u32 = 0x0003_0F0A;
-    /// `HookModuleRegister` — Hook host v2 chain-anchored (E14.L2 axiom)
-    /// registration receipt.
-    pub const HOOK_MODULE_REGISTER: u32 = 0x0003_0F0B;
-    /// `ObserverQuarantine` — Observer host v2 (E15 axiom)
-    /// chain-anchored trap-quarantine receipt. Emitted by the runtime
-    /// supervisor when an observer wasm execution trips a
-    /// sandbox-boundary failure — the host catches the trap +
-    /// generates this event so the chain anchors observer compromise
-    /// without observer wasm authorship of the receipt
-    /// (chain-non-affecting clause 3 — host-supervised emission).
-    pub const OBSERVER_QUARANTINE: u32 = 0x0003_0F0C;
 
     /// `ReplicaIdAllocation` — federation-replica registration
     /// receipt. Define-only — the Cargo feature
@@ -174,7 +163,7 @@ mod tests {
     /// Compile-time SHAPE-only confirmation: the reservation does NOT
     /// collide with any Core Event TypeCode (different sub-range).
     /// A misalloc that crosses the Entity / Event boundary would
-    /// silently re-use a HookModuleRegister-tier slot.
+    /// silently re-use a Core Event slot.
     #[test]
     fn room_marker_reserved_does_not_overlap_core_event_range() {
         let (lo, hi) = CORE_EVENT;
@@ -187,9 +176,9 @@ mod tests {
 
     // ----- Forward-looking event TypeCode reservations -----
 
-    /// `ReplicaIdAllocation` lands at the next free Core Event slot
-    /// after `ObserverQuarantine 0x0003_0F0C`. Implementers must not
-    /// collide.
+    /// `ReplicaIdAllocation` lands at the `0x0003_0F0D` Core Event
+    /// slot (the `0x0003_0F0B..=0x0003_0F0C` slots are permanent
+    /// gaps). Implementers must not collide.
     #[test]
     fn replica_id_allocation_typecode_pinned_at_0x0003_0f0d() {
         assert_eq!(core_event::REPLICA_ID_ALLOCATION, 0x0003_0F0D);
@@ -222,7 +211,7 @@ mod tests {
     }
 
     /// Forward-looking event TypeCodes do NOT collide with any
-    /// previously pinned Core Event slot (`0x0003_0F01..=0x0003_0F0C`).
+    /// previously pinned Core Event slot (`0x0003_0F01..=0x0003_0F0A`).
     #[test]
     fn forward_looking_event_typecodes_no_collision_with_existing() {
         let pinned_existing: &[u32] = &[
@@ -236,8 +225,6 @@ mod tests {
             core_event::PER_REGION_ERASURE_PROGRESS,
             core_event::DEK_MIGRATION_COMPLETED,
             core_event::COMPLIANCE_TIER_CHANGE,
-            core_event::HOOK_MODULE_REGISTER,
-            core_event::OBSERVER_QUARANTINE,
         ];
         for new_slot in [
             core_event::REPLICA_ID_ALLOCATION,

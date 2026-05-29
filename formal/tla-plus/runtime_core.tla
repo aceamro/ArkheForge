@@ -7,7 +7,7 @@
  * refinement module EXTENDs runtime_core
  * and adds its module-specific invariant set.
  *
- * Anchored to E1-E15 axioms in the runtime architecture documentation.
+ * Anchored to E1-E14 axioms in the runtime architecture documentation.
  * Apalache primary tooling per formal/tla-plus/README.md.
  *)
 
@@ -136,7 +136,7 @@ Spec == Init /\ [][Next]_vars
  * Apalache type-checker verifies the mapping's type-soundness at
  * `apalache-mc typecheck` time.
  *
- * See formal/tla-plus/README.md for the E1-E15 <-> TLA+ INV mapping
+ * See formal/tla-plus/README.md for the E1-E14 <-> TLA+ INV mapping
  * table and the Adversary A/B residual reduction lemma anchors.
  *)
 

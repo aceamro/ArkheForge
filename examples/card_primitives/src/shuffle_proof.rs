@@ -40,8 +40,7 @@
 //!   zeroized today; production hardening (a `blake3::Hasher: Zeroize`
 //!   upstream feature) is a follow-on carry.
 //! - **Type-strengthened commitment.** `ShuffleCommitment(blake3::Hash)`
-//!   inherits `blake3::Hash`'s constant-time `PartialEq` (see the
-//!   pattern in `arkhe-forge-platform/src/wasm_runtime_common/register_module.rs`).
+//!   inherits `blake3::Hash`'s constant-time `PartialEq`.
 //!   `[u8; 32]` newtype would have used `core::cmp::PartialEq` — variable-
 //!   time array comparison is acceptable for *commitment* equality
 //!   (no secret), but the typed form propagates the constant-time
@@ -82,8 +81,7 @@ const DOMAIN_SHOWDOWN: &[u8] = b"arkhe-forge::shuffle_proof::v1::showdown::";
 ///
 /// Backed by [`blake3::Hash`] rather than a raw `[u8; 32]` newtype —
 /// this propagates BLAKE3's constant-time `PartialEq` (constant-time
-/// 32-byte equality) to all sites that accept this type. Pattern
-/// alignment with `arkhe-forge-platform/src/wasm_runtime_common/register_module.rs`.
+/// 32-byte equality) to all sites that accept this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShuffleCommitment(blake3::Hash);
 

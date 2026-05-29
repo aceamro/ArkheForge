@@ -23,8 +23,6 @@ default          = []
 tier-1-kms       = ["arkhe-forge-platform/tier-1-kms"]
 tier-2-multi-kms = ["arkhe-forge-platform/tier-2-multi-kms"]
 tier-2-aws-kms   = ["arkhe-forge-platform/tier-2-aws-kms"]
-tier-2-hook-host-v2 = ["arkhe-forge-platform/tier-2-hook-host-v2"]
-tier-2-observer-host-v2 = ["arkhe-forge-platform/tier-2-observer-host-v2"]
 
 [lints]
 workspace = true

@@ -60,24 +60,6 @@ aws-sdk-kms         = { version = "1", default-features = false, features = ["rt
 aws-config          = { version = "1", default-features = false, features = ["rt-tokio", "client-hyper"], optional = true }
 tokio               = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time"], optional = true }
 
-# Tier-2 Hook host v2 + Observer host v2 — wasmtime preview-2 + WASI
-# sandbox embedding. Both hosts share the wasmtime runtime; Cargo dedup
-# pulls the dep once when either feature is enabled.
-#
-# - Hook host v2 (E14.L2-Allow) — chain-affecting compute
-#   path; pinned NaN canonicalisation + SIMD off + 10 ms fuel budget +
-#   `arkhe:hook/{state, emit, fuel}` ALLOW; `wasi:random/*` /
-#   `wasi:clocks/*` DENY.
-# - Observer host v2 (E15) — chain-non-affecting
-#   side-effect path; fuel-metering only (no determinism axes pinned —
-#   observer execution does not contribute to the chain hash) +
-#   `arkhe:observer/*` capability-token allow set + same WASI deny.
-#
-# Build-time + binary-size cost is significant (~50 transitive crates /
-# ~5-10 MB release size), hence the per-host opt-in gate.
-wasmtime            = { version = "~43.0.1", default-features = false, features = ["cranelift", "runtime"], optional = true }
-wasmtime-wasi       = { version = "~43.0.1", default-features = false, optional = true }
-
 [features]
 # Feature flag surface.
 default          = []                                             # Tier-0 dev only
@@ -87,16 +69,6 @@ tier-2-multi-kms = ["tier-1-kms", "aes-gcm", "aes-gcm-siv"]       # Tier-2 produ
 # own `tier-2-<vendor>-kms` flag so operators can select exactly the backends
 # they need. The `KmsBackend` trait + `MockKmsBackend` are always available.
 tier-2-aws-kms   = ["aws-sdk-kms", "aws-config", "tokio"]
-# Tier-2 Hook host v2 — opt-in wasmtime + WASI preview-2 sandbox
-# (E14.L2-Allow runtime enforcement). Tier-0 / Tier-1 deployments
-# stay on `NoopHookHost`; Tier-2 enables the wasmtime-backed sandbox.
-tier-2-hook-host-v2 = ["wasmtime", "wasmtime-wasi"]
-# Tier-2 Observer host v2 — opt-in wasmtime + WASI preview-2 sandbox
-# (E15 Observer Capability Confinement). Independent of
-# `tier-2-hook-host-v2`: Tier-2 deployments may enable just the hook
-# sandbox, just the observer sandbox, or both. Tier-0 / Tier-1 stay on
-# `NoopObserverHost` (v1 pass-through).
-tier-2-observer-host-v2 = ["wasmtime", "wasmtime-wasi"]
 
 # Platform FFI for `process_protection`.
 # Linux + macOS share the libc surface (mlockall / prctl / setrlimit / ptrace);
@@ -115,14 +87,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Memory",
     "Win32_System_Diagnostics_Debug",
 ] }
-
-# Test-only deps. `wat` is used by `hook_host::capability_linker` tests
-# (gated by `tier-2-hook-host-v2`) to build small modules from inline WAT
-# without enabling the wasmtime crate's `wat` feature for production
-# builds. Cargo compiles dev-dependencies only for `cargo test` of this
-# crate, so consumers pay zero cost.
-[dev-dependencies]
-wat = "1"
 
 [lints]
 workspace = true

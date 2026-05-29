@@ -2,12 +2,10 @@
 //!
 //! The trait is the runtime's wire-contract marker — `#[derive(ArkheEvent)]`
 //! in `arkhe-forge-macros` is the only way to satisfy it. The catalog in
-//! this module defines all fourteen Core-range Events
-//! (`0x0003_0F01..=0x0003_0F0E`): `HookModuleRegister` anchors hook-module
-//! ingestion receipts, `ObserverQuarantine` anchors observer-host trap
-//! quarantines, and the `ReplicaIdAllocation` + `AuditReceiptKeyPolicy`
-//! pair reserves the forward-looking event surface for federation /
-//! long-term audit activation.
+//! this module defines all twelve Core-range Events
+//! (`0x0003_0F01..=0x0003_0F0E`): the `ReplicaIdAllocation` +
+//! `AuditReceiptKeyPolicy` pair reserves the forward-looking event
+//! surface for federation / long-term audit activation.
 //!
 //! ## Forward-looking events — 0-emission posture
 //!
@@ -118,36 +116,6 @@ pub enum ComplianceTier {
     Tier1 = 1,
     /// Tier-2 — production Multi-KMS + threshold HSM (t-of-n Shamir).
     Tier2 = 2,
-}
-
-/// Trap classification for [`ObserverQuarantine`] — surfaced into the
-/// chain-anchored receipt so replay + audit can distinguish each
-/// sandbox-boundary failure mode.
-///
-/// **Wire-stable enum** (mirrors `RuntimeSignatureClass` / `ComplianceTier`):
-/// `#[repr(u8)]` + `#[non_exhaustive]` so additive expansion is
-/// non-breaking. Each variant has a fixed discriminant so the postcard
-/// wire format stays stable across schema-version bumps.
-///
-/// Mirrored as a host-internal type by `arkhe_forge_platform::observer_host`
-/// (re-exports this same enum). Single source of truth lives here in
-/// `arkhe-forge-core` because the value enters the L0 chain via the
-/// `ObserverQuarantine` event.
-#[non_exhaustive]
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ObserverTrapClass {
-    /// wasm panic / cranelift trap — observer code itself faulted.
-    Panic = 0,
-    /// Fuel exhaustion — observer exceeded the per-invocation budget.
-    BudgetExceeded = 1,
-    /// Observer attempted to call a host-fn for which the active
-    /// per-invocation capability set lacks the matching token.
-    CapabilityDenied = 2,
-    /// Catch-all for cranelift trap variants not classified above
-    /// (incl. operator host-config errors like "no capability impl
-    /// registered" — distinguished only at audit-log granularity).
-    Other = 3,
 }
 
 /// Progress scope selector for multi-region / multi-KMS erasure progress
@@ -338,121 +306,6 @@ pub struct ComplianceTierChange {
     pub effective_tick: Tick,
     /// External identity of the operator who authorized the change.
     pub operator: ExternalId,
-}
-
-/// `HookModuleRegister` — chain-anchored Hook host v2 module-registration
-/// receipt (E14.L2 axiom).
-///
-/// Emitted by the wasmtime hook host on every successful
-/// `register_module(bytes, expected_digest)`. Pairs the operator's
-/// manifest digest (which pins the expected module digest) with the
-/// actually-registered module digest — replay validates the host
-/// instantiated the module the manifest demanded, not a substitute.
-///
-/// **3-tier ingestion** anchored here:
-///
-/// - **Tier 1 (BLAKE3 digest pin)** — `module_digest` matches the value
-///   the operator pinned in `manifest_digest`-anchored manifest TOML.
-///   Catches operator config typos + accidental file substitution.
-///   This tier ships fully.
-/// - **Tier 2 (sigstore sign-before-load)** — recorded via
-///   `attestation_class` field; the verification closure is provided
-///   by an integration layer above this crate. Tier 1 alone is
-///   sufficient for the runtime contract: operator config is the trust
-///   root.
-/// - **Tier 3 (cargo-vet provenance)** — build-time check; runtime only
-///   records the attestation hash for chain-anchored audit.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
-#[arkhe(type_code = 0x0003_0F0B, schema_version = 1)]
-pub struct HookModuleRegister {
-    /// Wire schema version.
-    pub schema_version: u16,
-    /// BLAKE3 digest of the manifest TOML that pinned the expected
-    /// module digest. Replay uses this to verify the manifest itself
-    /// was unchanged between registration time and replay time.
-    ///
-    /// **Caller responsibility**: this field is host-side recorded but
-    /// NOT host-side enforced. The integration layer
-    /// (`arkhe-forge-platform/src/manifest.rs`) is responsible for
-    /// hashing the operator's manifest TOML and passing the result
-    /// through to the event emission, alongside the manifest-signature
-    /// verification closure that makes the field cryptographically
-    /// meaningful.
-    pub manifest_digest: [u8; 32],
-    /// BLAKE3 digest of the registered wasm module bytes. Equals the
-    /// `expected_digest` parameter the operator passed; recorded so
-    /// replay can re-verify the module bytes against the same hash.
-    pub module_digest: [u8; 32],
-    /// Tick at which the module was registered.
-    pub register_tick: Tick,
-    /// Attestation class signalling Tier 2/3 presence. The default
-    /// path is [`RuntimeSignatureClass::None`] (Tier 1 BLAKE3 digest
-    /// pin only); Tier 2 sigstore integrations set the field to
-    /// `Ed25519` / `MlDsa65` / `HybridEd25519MlDsa65` once a
-    /// verification closure is wired in.
-    ///
-    /// **Semantics distinction**: in this `HookModuleRegister` context
-    /// `None` means "Tier 1 BLAKE3 digest pin only; no Tier 2/3
-    /// attestation present". Distinct from the audit-receipt
-    /// `None` (= "no signature class") which carries different
-    /// operational semantics. Same enum, context-specific reading.
-    pub attestation_class: RuntimeSignatureClass,
-}
-
-/// `ObserverQuarantine` — chain-anchored Observer host v2 trap-
-/// quarantine receipt (E15 axiom).
-///
-/// Emitted by the runtime supervisor when an observer wasm execution
-/// trips a sandbox-boundary failure (panic / budget / capability
-/// denial / other trap). The receipt anchors the operator's audit
-/// trail without observer wasm authorship — chain-non-affecting
-/// clause 3: the *host* supervises emission.
-///
-/// **Trigger boundary**: only `ObserverError` variants from the host
-/// trip Quarantine emission. `CapabilityExecutionError` (PG unreachable
-/// etc.) is **operational, NOT chain-anchored** — those surface via
-/// metric / `runtime_doctor_journal` instead.
-///
-/// **Replay-side verification**: replay re-checks the
-/// `observer_module_digest` against the bytes the manifest pinned at
-/// registration time (mirrors `HookModuleRegister`'s replay
-/// verification). Mismatch indicates manifest tampering or operator
-/// mis-deployment.
-///
-/// **3-tier ingestion mirror**: `attestation_class` records the
-/// observer module's ingestion attestation tier (Tier 1 BLAKE3 digest
-/// pin active by default; Tier 2 sigstore + Tier 3 cargo-vet
-/// scaffolded). Per-Quarantine the `attestation_class` reflects the
-/// state at registration time so audit logs distinguish "trapped after
-/// Tier-1-only ingestion" from Tier-2/3 paths.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
-#[arkhe(type_code = 0x0003_0F0C, schema_version = 1)]
-pub struct ObserverQuarantine {
-    /// Wire schema version.
-    pub schema_version: u16,
-    /// BLAKE3 digest of the registered observer module bytes that
-    /// trapped. Equals the `expected_digest` the operator pinned at
-    /// registration; recorded so replay can re-verify the module
-    /// bytes against the same hash.
-    pub observer_module_digest: [u8; 32],
-    /// Tick at which the trap occurred + Quarantine was emitted by
-    /// the host supervisor.
-    pub quarantine_tick: Tick,
-    /// Trap classification — distinguishes panic / budget / cap-
-    /// deny / other for forensic + operator triage.
-    pub trap_class: ObserverTrapClass,
-    /// Attestation class signalling the Tier 2/3 ingestion state at
-    /// registration time. The default path is
-    /// [`RuntimeSignatureClass::None`] (Tier 1 BLAKE3 digest pin
-    /// only); Tier 2/3 paths set Ed25519 / MlDsa65 / Hybrid.
-    ///
-    /// **Semantics distinction**: in this `ObserverQuarantine`
-    /// context the value records the *observer module ingestion*
-    /// attestation tier — NOT the event-signing class. The
-    /// Quarantine event itself is chain-anchored under the runtime's
-    /// standard signing path (E13 shell-per-tick
-    /// `SignatureClassPolicy`), independent of this field.
-    pub attestation_class: RuntimeSignatureClass,
 }
 
 // ============================================================================
@@ -750,8 +603,6 @@ mod tests {
         assert_eq!(PerRegionErasureProgress::TYPE_CODE, 0x0003_0F08);
         assert_eq!(DekMigrationCompleted::TYPE_CODE, 0x0003_0F09);
         assert_eq!(ComplianceTierChange::TYPE_CODE, 0x0003_0F0A);
-        assert_eq!(HookModuleRegister::TYPE_CODE, 0x0003_0F0B);
-        assert_eq!(ObserverQuarantine::TYPE_CODE, 0x0003_0F0C);
         // Forward-looking event TypeCode pins are verified only when
         // the activation feature is enabled (cfg-gate per 3-layer
         // 0-emission defense, layer (b)). The TypeCode constants in
@@ -760,98 +611,6 @@ mod tests {
         assert_eq!(ReplicaIdAllocation::TYPE_CODE, 0x0003_0F0D);
         #[cfg(feature = "audit-receipt-key-identified")]
         assert_eq!(AuditReceiptKeyPolicy::TYPE_CODE, 0x0003_0F0E);
-    }
-
-    #[test]
-    fn hook_module_register_serde_roundtrip() {
-        let ev = HookModuleRegister {
-            schema_version: 1,
-            manifest_digest: [0xAAu8; 32],
-            module_digest: [0xBBu8; 32],
-            register_tick: Tick(123),
-            attestation_class: RuntimeSignatureClass::None,
-        };
-        let bytes = postcard::to_stdvec(&ev).unwrap();
-        let back: HookModuleRegister = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(ev, back);
-    }
-
-    #[test]
-    fn hook_module_register_type_code_matches_typecode_constant() {
-        // The typecode.rs core_event::HOOK_MODULE_REGISTER constant and
-        // the #[arkhe(type_code = ...)] derive must agree — guards against
-        // accidental drift between the catalog and the struct attribute.
-        assert_eq!(
-            HookModuleRegister::TYPE_CODE,
-            crate::typecode::core_event::HOOK_MODULE_REGISTER
-        );
-    }
-
-    #[test]
-    fn observer_quarantine_serde_roundtrip() {
-        let ev = ObserverQuarantine {
-            schema_version: 1,
-            observer_module_digest: [0xCCu8; 32],
-            quarantine_tick: Tick(456),
-            trap_class: ObserverTrapClass::Panic,
-            attestation_class: RuntimeSignatureClass::None,
-        };
-        let bytes = postcard::to_stdvec(&ev).unwrap();
-        let back: ObserverQuarantine = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(ev, back);
-    }
-
-    #[test]
-    fn observer_quarantine_type_code_matches_typecode_constant() {
-        assert_eq!(
-            ObserverQuarantine::TYPE_CODE,
-            crate::typecode::core_event::OBSERVER_QUARANTINE
-        );
-    }
-
-    #[test]
-    fn observer_trap_class_wire_discriminants_stable() {
-        // Verify each variant's wire-stable discriminant — `#[repr(u8)]`
-        // pins these so the postcard format stays bit-identical across
-        // schema-version bumps. Drift here = wire breakage.
-        for (variant, expected_disc) in [
-            (ObserverTrapClass::Panic, 0u8),
-            (ObserverTrapClass::BudgetExceeded, 1u8),
-            (ObserverTrapClass::CapabilityDenied, 2u8),
-            (ObserverTrapClass::Other, 3u8),
-        ] {
-            // Round-trip through postcard verifies the wire byte
-            // matches the declared discriminant. (postcard encodes
-            // unit-variant enums as a single varint of the
-            // discriminant.)
-            let bytes = postcard::to_stdvec(&variant).unwrap();
-            assert_eq!(
-                bytes,
-                vec![expected_disc],
-                "ObserverTrapClass::{variant:?} discriminant drift"
-            );
-        }
-    }
-
-    #[test]
-    fn observer_quarantine_with_each_trap_class_roundtrips() {
-        for trap_class in [
-            ObserverTrapClass::Panic,
-            ObserverTrapClass::BudgetExceeded,
-            ObserverTrapClass::CapabilityDenied,
-            ObserverTrapClass::Other,
-        ] {
-            let ev = ObserverQuarantine {
-                schema_version: 1,
-                observer_module_digest: [0u8; 32],
-                quarantine_tick: Tick(1),
-                trap_class,
-                attestation_class: RuntimeSignatureClass::None,
-            };
-            let bytes = postcard::to_stdvec(&ev).unwrap();
-            let back: ObserverQuarantine = postcard::from_bytes(&bytes).unwrap();
-            assert_eq!(ev.trap_class, back.trap_class);
-        }
     }
 
     #[test]

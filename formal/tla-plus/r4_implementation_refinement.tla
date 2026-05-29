@@ -78,9 +78,6 @@ ALIAS_entryId == TRUE
 \* @typeAlias: r4Verb = Str;
 ALIAS_r4Verb == TRUE
 
-\* @typeAlias: moduleId = Str;
-ALIAS_moduleId == TRUE
-
 \* @typeAlias: r4Entry = { id: Str, parent_entry: Str, depth: Int };
 ALIAS_r4Entry == TRUE
 
@@ -106,11 +103,7 @@ CONSTANTS
     \* @type: Int;
     MaxMetaActivities,  \* Bounded MC ceiling: meta-activities
     \* @type: Int;
-    MaxImports,         \* Bounded MC ceiling: layer imports
-    \* @type: Set($moduleId);
-    BoundaryModules,    \* {"hook_host", "observer_host"} — L1+ runtime sandbox boundary stratum (R2-S9)
-    \* @type: Set($moduleId);
-    RuntimeModules      \* {"wasm_runtime_common"} — L1+ runtime sandbox runtime stratum (R2-S9)
+    MaxImports          \* Bounded MC ceiling: layer imports
 
 ASSUME
     /\ Layers = {"L0", "L1", "L2"}
@@ -121,8 +114,6 @@ ASSUME
     /\ MaxEntries \in Nat \ {0}
     /\ MaxMetaActivities \in Nat \ {0}
     /\ MaxImports \in Nat \ {0}
-    /\ BoundaryModules = {"hook_host", "observer_host"}
-    /\ RuntimeModules = {"wasm_runtime_common"}
 
 (* --- Layer order helper (E3 anchor) ---
  *
@@ -240,55 +231,6 @@ ActivitySelfLoopBlocked ==
 MetaVerbDepthBounded ==
     \A a \in r4_activities : a.meta_verb_depth <= MaxMetaVerbDepth
 
-\* INV E3-X: ImportDirectionMonotone (MC, R4-X stratum extension).
-\* Formal-method companion to the mechanical CI grep gate.
-\*
-\* Scope: L1+ runtime sandbox sub-DAG (separate from R4-X's L0-internal
-\* `abi → state → runtime → persist` DAG documented in the R4-X sibling
-\* concept note below). Within `arkhe-forge-platform`:
-\*   - Boundary stratum: `hook_host` + `observer_host` (sandbox-facing
-\*     wasmtime hosts that own host-fn dispatch + cap-token gating)
-\*   - Runtime stratum: `wasm_runtime_common` (chain-effect-aware
-\*     factory module: EngineProfile, register_module_common,
-\*     scan_module_imports, WASI_DENY_PREFIXES, SealedHostImport,
-\*     SealedCapToken)
-\*
-\* Direction invariant: imports flow boundary → runtime exclusively;
-\* reverse edge (runtime → boundary) is forbidden. The CI lint job
-\* (`.github/workflows/ci.yml` line 145-163) enforces this at the
-\* source-code level via `grep -E "use\s+
-\* (crate::)?(hook_host|observer_host)"` against
-\* `arkhe-forge-platform/src/wasm_runtime_common/`; this INV is the
-\* TLA+-abstract companion that names the property in the formal layer.
-\*
-\* The INV body captures the *necessary precondition* (boundary/runtime
-\* stratum disjointness) — the *sufficient condition* (edge direction at
-\* the runtime module-graph) is not modeled at the TLA+ refinement level
-\* per design (no `r4_*` variable models the L1+ runtime module-graph).
-\* The dual-layer defense-in-depth anchors the property:
-\*   - TLA+ INV body: necessary precondition `BoundaryModules \cap
-\*     RuntimeModules = {}` — Apalache-checkable static set disjointness
-\*   - Source-level enforcement (sufficient condition): CI grep gate at
-\*     `.github/workflows/ci.yml` lines 145-163
-\*     runs `grep -rE "use\s+(crate::)?(hook_host|observer_host)"` against
-\*     `arkhe-forge-platform/src/wasm_runtime_common/`; any reverse-edge
-\*     import (runtime → boundary) fails the lint job.
-\*
-\* R2-S9 (option ε refined α+δ): vacuous TRUE → necessary precondition
-\* INV body (α semantic gain) + design intent comment block carry
-\* (δ source-level enforcement reference enrichment).
-\*
-\* Anchored to:
-\*   - `.github/workflows/ci.yml` lint job R4-X verify step (lines 145-163)
-\*   - `arkhe-forge-platform/src/wasm_runtime_common/mod.rs` (runtime
-\*     stratum, head-doc R4-X stratum classification)
-\*   - `arkhe-forge-platform/src/{hook_host,observer_host}/` (boundary
-\*     stratum)
-\*   - `book/src/en/appendix/decisions.md` R4-X (L0-internal sibling
-\*     concept; this INV extends the R4-X principle to L1+ runtime)
-ImportDirectionMonotone ==
-    BoundaryModules \cap RuntimeModules = {}
-
 (* --- Concrete state machine refinement --- *)
 
 \* RecordLayerImport — register a layer-import edge. Pre-condition
@@ -393,10 +335,6 @@ SpecR4 == InitR4 /\ [][NextR4]_vars_r4
  * Section 3 — Module-specific INVs
  *
  *   E3-LayerImportStrictlyDownward  (MC, E3 cross-layer 3-tier)
- *   E3-X-ImportDirectionMonotone    (MC, R4-X stratum extension;
- *                                    L1+ runtime sub-DAG boundary→
- *                                    runtime single direction; formal
- *                                    companion to CI grep gate)
  *   E8-EntryParentDagDepthBounded   (MC, hard cap 64)
  *   E8-EntryParentDagAcyclic        (MC, depth monotonicity)
  *   E9-ActivitySelfLoopBlocked      (MC, actor # target)

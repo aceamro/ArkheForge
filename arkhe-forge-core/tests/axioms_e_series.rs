@@ -1,4 +1,4 @@
-//! Axiom E-series harness — verifies E1-E15 enforcement-tier claims.
+//! Axiom E-series harness — verifies E1-E14 enforcement-tier claims.
 //!
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Type-system proven**: E1, E2, E3, E4, E6, E7, E8, E9, E10, E11, E12,

@@ -1,9 +1,9 @@
 # formal/axiom-test-cite.toml
 #
-# 12 MC (MACHINE-CHECKED) axioms × TLA+ INV × impl test 1:1 cite
+# 11 MC (MACHINE-CHECKED) axioms × TLA+ INV × impl test 1:1 cite
 #
 # Source-of-truth machine-readable mapping for the CI grep gate verification.
-# Companion to formal/tla-plus/README.md narrative table (E1-E15 ↔ TLA+ INV).
+# Companion to formal/tla-plus/README.md narrative table (E1-E14 ↔ TLA+ INV).
 #
 # Anchored to:
 #   - formal/tla-plus/{runtime_core,cr1,cr2,cr3,cr4,r4}.tla (TLA+ refinement)
@@ -57,10 +57,9 @@ impl_paths = [
 [E3]
 tier = "MC"
 axiom = "Runtime → L0 strictly downward; L1 → L2 forbidden"
-tla_invs = ["LayerImportStrictlyDownward", "ImportDirectionMonotone"]
+tla_invs = ["LayerImportStrictlyDownward"]
 tla_module = "formal/tla-plus/r4_implementation_refinement.tla"
 sibling_concept = "L0-internal 4-stratum DAG"
-runtime_sub_dag_extension = "ImportDirectionMonotone — L1+ runtime sandbox sub-DAG (boundary→runtime single direction); structural witness via impl_test e3_l1_does_not_pull_platform"
 impl_tests = ["e3_l1_does_not_pull_platform"]
 impl_paths = ["arkhe-forge-core/tests/axioms_e_series.rs:107"]
 
@@ -153,59 +152,14 @@ impl_paths = [
 ui_test_anchor = "arkhe-forge-macros/tests/{pure_instant_now,pure_os_rng,pure_thread_rng,pure_unix_epoch,pure_macro}.rs"
 
 # ============================================================
-# E14.L2-Allow — runtime wasmtime sandbox + host-import allow-list
+# E14.L2-Allow — runtime chain-hash determinism (canonical bytes + WAL chain)
 # ============================================================
 [E14_L2_Allow]
 tier = "MC"
-axiom = "Hook host v2 wasmtime sandbox: NaN canonicalization + SIMD opt-out + host-import allow-list 4-fn"
-tla_invs = ["ChainHashDeterministic", "HostImportSealed"]
-tla_lemma = "SealedHostLinker_implies_4_set"
+axiom = "Runtime chain-hash determinism: canonical Component/Event postcard bytes + WAL chain verification (ChainHashDeterministic)"
+tla_invs = ["ChainHashDeterministic"]
 tla_module = "../ArkheKernel/formal/tla-plus/cr1_chain_hash_invariant.tla"
-host_imports = [
-    "hook.state.read",
-    "hook.state.write",
-    "hook.emit.extra_bytes",
-    "hook.fuel.consumed",
-]
-e_9_cross_check = "1:1 mapping host-fn 4 ↔ TLA+ HostImports verified"
 impl_tests = [
-    "state_read_traps_with_capability_denied_when_missing",
-    "state_read_returns_minus_one_when_key_not_found",
-    "state_read_returns_seeded_value_length_when_key_found",
-    "state_read_returns_minus_two_when_buffer_too_small",
-    "state_read_traps_on_oob_ptr_plus_len",
-    "state_read_traps_on_negative_len",
-    "state_read_traps_on_negative_ptr",
-    "state_read_traps_on_huge_ptr",
-    "state_read_zero_key_returns_minus_one_in_empty_scratchpad",
-    "state_write_traps_with_capability_denied_when_missing",
-    "state_write_inserts_into_scratchpad",
-    "state_write_traps_on_key_oob",
-    "state_write_traps_on_val_oob",
-    "state_round_trip_write_then_read",
-    "emit_extra_bytes_traps_with_capability_denied_when_missing",
-    "emit_extra_bytes_appends_to_seeded_builder",
-    "emit_extra_bytes_traps_when_extra_not_seeded",
-    "emit_extra_bytes_traps_on_oob",
-    "fuel_consumed_traps_with_capability_denied_when_missing",
-    "fuel_consumed_returns_zero_at_invocation_start",
-    "fuel_consumed_grows_with_wasm_work",
-    "fuel_consumed_handles_zero_initial_gracefully",
-    # EngineProfile factory
-    # tests verify rule 1 (NaN canon) + rule 2 (SIMD off, including
-    # wasm_relaxed_simd) + rule 4 (fuel) at the wasm_runtime_common
-    # factory layer (single source of truth for chain-effect-aware
-    # determinism axis pinning).
-    "engine_profile_replay_deterministic_builds_engine",
-    "engine_profile_replay_deterministic_rejects_simd",
-    "engine_profile_chain_non_affecting_builds_engine",
-    "engine_profile_fuel_budget_accessor",
-    # SealedHostImport sealed-trait
-    # safeguard witness tests verify HostImportSealed INV at the
-    # type-system layer (Rust-side anchor of `pub trait
-    # SealedHostImport: private_seal::Sealed`).
-    "hook_capability_linker_satisfies_sealed_host_import",
-    "observer_capability_linker_satisfies_sealed_host_import",
     # ChainHashDeterministic
     # INV implementation witnesses in arkhe-kernel/src/persist/wal.rs.
     # Explicit ChainBroken path coverage (verify_chain_detects_broken_
@@ -237,13 +191,8 @@ impl_tests = [
     "event_canonical_bytes_pinned",
 ]
 impl_paths = [
-    "arkhe-forge-platform/src/hook_host/capability_linker.rs",
-    "arkhe-forge-platform/src/wasm_runtime_common/mod.rs",
-    "arkhe-forge-platform/src/wasm_runtime_common/sealed_traits.rs",
-    # ChainHashDeterministic INV witness scope (wal.rs
-    # verify_chain* tests). E14_L2_Allow tla_invs include both
-    # HostImportSealed (wasm runtime) and ChainHashDeterministic (wal
-    # chain hash) — impl_paths span both layers accordingly.
+    # ChainHashDeterministic INV witness scope (wal.rs verify_chain*
+    # tests) in the kernel persist layer.
     "../ArkheKernel/arkhe-kernel/src/persist/wal.rs",
     # arkhe-macros derive emission canonical_bytes byte-identity
     # witnesses (component_canonical_bytes_pinned +
@@ -251,52 +200,6 @@ impl_paths = [
     # test surface (consumed via the same `::arkhe_kernel::...` paths
     # an external domain crate would use).
     "../ArkheKernel/arkhe-kernel/tests/derive_macros.rs",
-]
-
-# ============================================================
-# E15 — Observer Capability Confinement (chain-non-affecting 4-clause)
-# ============================================================
-[E15]
-tier = "MC"
-axiom = "Observer sandbox: panic close (a) + capability-token confinement (b); chain-non-affecting 4-clause"
-tla_invs = [
-    "ObserverChainNonAffecting",
-    "ObserverCapabilityConfined",
-    "QuarantineHostSupervised",
-    # sealed-trait type-system anchor of
-    # E15.b confinement (HookCapTokenSealed + ObserverCapTokenSealed).
-    "CapTokenSealed",
-]
-tla_theorem = "ChainProgressionUnaffectedByObserver"
-tla_lemma = "SealedTrait_implies_E15.b"
-tla_module = "../ArkheKernel/formal/tla-plus/cr4_observer_capability_confinement.tla"
-cap_tokens = ["PgWrite"]
-typecode = "0x0003_0F0C"
-impl_tests = [
-    "observer_cap_token_set_is_ordered_for_btreeset",
-    "observer_error_display_does_not_panic",
-    "observer_trap_class_variants_round_trip",
-    "observer_context_carries_only_capabilities",
-    "observer_store_data_with_capabilities_collects",
-    "observer_capability_is_send_sync_debug",
-    "trap_count_starts_at_zero",
-    "trap_count_does_not_increment_on_pass_through_invoke",
-    "observer_host_error_display_does_not_panic",
-    "observer_context_shape_check_holds_at_compile_time",
-    # SealedCapToken sealed-trait
-    # safeguard witness tests verify CapTokenSealed INV at the
-    # type-system layer (Rust-side anchor of `pub trait
-    # HookCapTokenSealed: private_seal::Sealed` +
-    # `ObserverCapTokenSealed: private_seal::Sealed`).
-    "hook_cap_token_satisfies_sealed_bound",
-    "observer_cap_token_satisfies_sealed_bound",
-]
-impl_paths = [
-    "arkhe-forge-platform/src/observer_host/mod.rs",
-    "arkhe-forge-platform/src/observer_host/capability_linker.rs",
-    "arkhe-forge-platform/src/observer_host/wasmtime_observer.rs",
-    "arkhe-forge-platform/src/wasm_runtime_common/mod.rs",
-    "arkhe-forge-platform/src/wasm_runtime_common/sealed_traits.rs",
 ]
 
 # ============================================================
@@ -369,12 +272,12 @@ property_statement = "AND-mode dispatch — both Ed25519 AND ML-DSA 65 verify mu
 cycle = "v0.13"
 sub_steps_closed = 9
 formal_modules = 6
-tla_invs = 17
-tla_theorems = 2
-tla_lemmas = 2
+tla_invs = 11
+tla_theorems = 1
+tla_lemmas = 0
 kani_properties = 5
 adversary_axes_closed = 3
-e_axioms_anchored = 12
+e_axioms_anchored = 11
 non_anchored_e_axioms = ["E1 (definitional)", "E2 (subsumed by E14)", "E10 (TYPE-ADJACENT)"]
 l0_a_axioms_anchored = 10
 
