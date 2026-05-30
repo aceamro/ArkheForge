@@ -2,7 +2,6 @@
 
 > **What this is:** an orientation map for AI agents (and new humans) working in this repo.
 > It is the entry point: read it before reading code, and **read §3 before editing anything**.
-> **🇰🇷 한 줄:** AI 에이전트용 길잡이 — 코드보다 이 파일을 먼저, **수정 전엔 반드시 §3 먼저** 읽으세요.
 
 ArkheForge is the **L1 + L2 runtime** that sits **on top of the ArkheKernel L0 microkernel**
 (a published crates.io dependency, `arkhe-kernel = "0.14"`). It turns the kernel's bare
@@ -22,13 +21,14 @@ not change any behavior.
 
 ## 0. How to use this file (agent prime directive)
 
-> **🇰🇷 한 줄:** 길 찾기는 §4, 커널 경계는 §2, 수정 금지선은 §3, 커밋 전엔 §6.
+> **In one line:** the kernel boundary is §2, the editing-hazard rules are §3, the commit gates are §6.
 
 1. **Orient** — §1 (what it is) + §2 (the layer model and the kernel boundary you must not cross).
 2. **Locate** — §4 (crate → role map) to find where a thing lives.
 3. **Before editing** — §3 (DO NOT TOUCH). The determinism + crypto + wire-format surfaces here
    are gated; an innocent edit can break replay, a CI gate, or a security property.
-4. **Understand the flow** — §5 traces one action from a `#[derive]` to a projected read-model.
+4. **Understand the flow** — §5 traces one action from a `#[derive]` to a projected read-model,
+   and shows how to write your own.
 5. **Before committing** — run the §6 gates. CI runs the same ones.
 6. **Stuck on a word?** — §7 is a glossary (~70 project terms).
 
@@ -44,7 +44,7 @@ not change any behavior.
 
 ## 1. What ArkheForge is
 
-> **🇰🇷 한 줄:** 커널(L0) 위의 L1+L2 런타임 — 5개 도메인 원시타입 + 순수성 게이트 + KMS/암호삭제 + WAL 내보내기/검증/프로젝션.
+> **In one line:** an application substrate on the kernel — 5 domain primitives, a purity gate, KMS/crypto-erasure, and WAL export/verify/projection.
 
 - **L1 domain core** (`arkhe-forge-core`) — five primitives: **User, Actor, Space, Entry,
   Activity** — built from sealed traits, pure compute, and deterministic entity-id derivation.
@@ -61,7 +61,7 @@ not change any behavior.
 
 ## 2. Layer model & the kernel boundary
 
-> **🇰🇷 한 줄:** L0←L1←L2←L3 단방향. forge는 커널 위에 *얹힐* 뿐, WAL append·인가·Effect 타입스테이트를 **재구현하면 안 됨**.
+> **In one line:** L0←L1←L2←L3 one-way; forge sits *on* the kernel and must never re-implement WAL append, authorization, or the `Effect` typestate.
 
 ```text
 L0  ArkheKernel        (separate repo, crates.io: arkhe-kernel 0.14)  ← sealed microkernel
@@ -99,7 +99,7 @@ grep gate forbid reverse edges. `arkhe-forge-core` (L1) must **not** depend on
 
 ## 3. ⛔ DO NOT TOUCH — editing hazards (READ BEFORE ANY EDIT)
 
-> **🇰🇷 한 줄:** 순수성 게이트·와이어 포맷·암호 정확성·증명 하네스 — 무심코 고치면 리플레이/보안/CI가 깨집니다.
+> **In one line:** the determinism, wire-format, and crypto surfaces here are gated — an innocent edit breaks replay, a gate, or a security property.
 
 ### 3.1 The L0 boundary
 Do **not** edit anything that belongs to the kernel. `arkhe-kernel`/`arkhe-macros` are
@@ -108,6 +108,9 @@ Never vendor, patch, or shadow them. A breaking need = a new kernel epoch, not a
 (`arkhe-runtime-proofs` spells this out as a "Layer A non-touch invariant.")
 
 ### 3.2 Purity / Subset-Rust gate (the discipline that makes replay work)
+- **Why it exists:** a `compute` body runs again during replay; if it could read the clock,
+  draw randomness, or touch I/O, a second run could diverge and break A1 bit-identical replay.
+  So those are banned by construction.
 - Every `ActionCompute::compute` body **must** carry `#[arkhe_pure]`
   (`arkhe-forge-macros/src/lib.rs:283-309`). A coverage test
   (`arkhe-trait-default-check/tests/action_compute_coverage.rs`) fails the build if any impl
@@ -116,9 +119,10 @@ Never vendor, patch, or shadow them. A breaking need = a new kernel epoch, not a
   rejects **clock** (`std::time::*`, `chrono`, `minstant`, `quanta`, …), **RNG** (`rand::*`,
   `getrandom::*`, `rdrand`), **I/O** (`std::fs`/`net`/`process`/`env`, `tokio::*`,
   `async_std::*`, `mio`, `socket2`), **FFI** (`libc`), and **`unsafe` blocks**.
-- Do **not** widen the deny-list (add an "allowed" path) without a spec amendment. Seeded RNGs
-  (`rand_chacha::ChaCha20Rng::seed_from_u64`) and deterministic crypto (`blake3::hash`) are the
-  only intentional exceptions.
+- Need a "time-like" value? Use the immutable `tick`/nonce fields from `ActionContext`. Need
+  randomness? Derive it deterministically (seeded `ChaCha20Rng`/BLAKE3). Do **not** widen the
+  deny-list without a spec amendment. Seeded RNGs (`rand_chacha::ChaCha20Rng::seed_from_u64`)
+  and deterministic crypto (`blake3::hash`) are the only intentional exceptions.
 
 ### 3.3 Byte-identity / wire-stability surfaces
 | Surface | Where | Why frozen |
@@ -178,7 +182,7 @@ syscalls. Do not introduce `unsafe` elsewhere.
 
 ## 4. Crate → role map (11 crates)
 
-> **🇰🇷 한 줄:** "X가 어디 있나" — grep 전에 이 표. 크레이트 단위 + 큰 크레이트는 파일 단위.
+> **In one line:** find which crate/file owns a thing before you grep.
 
 | Crate | Layer | Role |
 | --- | --- | --- |
@@ -193,6 +197,11 @@ syscalls. Do not introduce `unsafe` elsewhere.
 | `arkhe-runtime-testkit` | dev | proptest `Arbitrary` strategies + scope-based shrinker |
 | `examples/card_primitives` | example | provably-fair Texas Hold'em (9-stage commit-reveal) |
 | `examples/dice` | example | provably-fair 3D6 dice (commit-reveal, WAL persist + replay) |
+
+**Dependency rules:** shell/app authors depend on **only** `arkhe-forge` (the umbrella). The
+`arkhe-subset-rust-check` / `arkhe-trait-default-check` / `arkhe-runtime-testkit` crates are
+tooling and the `*-proofs` crate is a standalone proof harness — **never** production deps. The
+examples depend on `-core`/`-platform` directly for teaching clarity only.
 
 ### `arkhe-forge-core/src/` (L1 domain — 16 files)
 | File | Role |
@@ -233,7 +242,7 @@ syscalls. Do not introduce `unsafe` elsewhere.
 
 ## 5. Action lifecycle (define → projected read-model)
 
-> **🇰🇷 한 줄:** `#[derive]`+`#[arkhe_pure]` → 등록 → dispatch(GDPR 게이트) → 커널 submit/step → bridge compute → WAL append → 내보내기/검증 → 프로젝션.
+> **In one line:** one action's path from a `#[derive]` to a projected read-model.
 
 | # | Step | Where |
 | --- | --- | --- |
@@ -244,18 +253,55 @@ syscalls. Do not introduce `unsafe` elsewhere.
 | 5 | the kernel records to its WAL and authorizes/dispatches (L0 internals) | `arkhe-kernel 0.14` |
 | 6 | the kernel-side compute calls `bridge::kernel_compute`, which rebuilds an L1 `ActionContext`, runs the user `compute()`, drains `Vec<Op>` back to the kernel | `arkhe-forge-core/src/bridge.rs:105-149` |
 | 7 | `RuntimeService::export_wal` + `wal_to_sink` frame each **unmodified** `WalRecord` (`ARKHEXP1` magic + `u64` BE length prefix) | `dispatcher.rs:237-265`, `wal_export/mod.rs` |
-| 8 | wire-stability tests assert the record section is bit-exact (DO NOT TOUCH #7) | `wal_export/wire_stability.rs:59-96` |
+| 8 | wire-stability tests assert the record section is bit-exact (DO NOT TOUCH #7) | `wal_export/wire_stability.rs:59-200` |
 | 9 | `verify_attestation` checks audit receipts under the policy-pinned class (Hybrid = AND-mode) | `verifier.rs:89-147` |
 | 10 | `ProjectionRouter` routes `EventRecord`s by TypeCode into denormalized read-models | `projection.rs` |
 
 Run it end-to-end: `cargo run -p card_primitives` or `cargo run -p dice` (the dice example also
 has `--reset` and `--verify` modes that prove WAL replay byte-equality).
 
+### Adding your own Action
+
+See `examples/dice/src/action.rs` for a complete, working version. The shape:
+
+```rust
+use arkhe_forge_core::{arkhe_pure, ArkheAction};
+// also in scope: ActionCompute, ActionContext, ActionError (see the example for exact imports)
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheAction)]
+#[arkhe(type_code = 0x0001_0001, schema_version = 1, band = 1)]  // Action range; band=1 = bit-identical replay
+struct Greet {
+    pub schema_version: u16,   // MUST be the first field, type u16
+    pub who: String,
+}
+
+impl ActionCompute for Greet {
+    #[arkhe_pure]              // REQUIRED — the purity gate + a coverage test enforce it
+    fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // pure only: no clock/RNG/I/O. Emit events/ops via ctx.
+        Ok(())
+    }
+}
+
+// L2 dispatch:
+let mut svc = RuntimeService::new(world_id, manifest_digest);
+svc.register_action::<Greet>();
+svc.dispatch(
+    instance, Principal::System, &Greet { schema_version: 1, who: "world".into() },
+    Tick(0), CapabilityMask::SYSTEM, /* authenticated_actor */ None,
+)?;
+```
+
+`type_code`/`band`/`schema_version` are byte-identity surfaces (§3.3): keep `type_code` in the
+Action range, `band = 1` for anything that must replay identically, and `schema_version` as the
+first field. Pick a fresh `type_code`; never change a published one.
+
 ---
 
 ## 6. ✅ Verify before you commit
 
-> **🇰🇷 한 줄:** CI 2-잡(test/lint) + Kani 잡. 아래 명령을 로컬에서 그대로.
+> **In one line:** run the CI gates (and the Kani proofs) the same way CI does.
 
 CI (`.github/workflows/ci.yml`) enforces:
 
@@ -274,20 +320,38 @@ bash scripts/verify-axiom-cite.sh   # axiom inventory ↔ TLA+ INV ↔ impl test
 `verify-axiom-cite.sh` resolves cross-repo cites against a **sibling `../ArkheKernel`
 checkout**; without it, sibling-only entries are skipped (exit 0) — CI checks out the sibling.
 
-**Formal proofs (separate, heavier):** the Kani harness runs from its own crate on the pinned
-nightly:
+**Compliance-tier features** (these are *required build flags* per deployment tier, not optional
+extras — the default build is dev-only Tier-0):
 
 ```bash
-cd arkhe-runtime-proofs && cargo kani    # 4 bounded properties; ~35-min CI timeout
+# enable on the arkhe-forge umbrella (it proxies the first three to the platform crate):
+cargo build -p arkhe-forge --features tier-1-kms       # Argon2 + XChaCha20-Poly1305 (free-tier KMS)
+cargo build -p arkhe-forge --features tier-2-multi-kms # + AES-GCM / AES-GCM-SIV (production AEAD)
+cargo build -p arkhe-forge --features tier-2-aws-kms   # + AWS KMS backend (aws-sdk-kms + tokio)
+# platform-crate-only (not re-exported by the umbrella):
+cargo build -p arkhe-forge-platform --features tier-2-pqc-receipts  # ML-DSA-65 audit-receipt signing
 ```
 
-Dependency policy is in `deny.toml` (crates.io only, no git deps, dual MIT/Apache, CVE deny).
+The `all-features` test count (545) covers all tiers; `default` is 487.
+
+**Formal proofs (separate, heavier).** The 4-property Kani harness is its own crate (excluded
+from the workspace) on a pinned nightly:
+
+```bash
+rustup toolchain install nightly-2025-11-21
+cargo install --locked kani-verifier            # one-time
+cd arkhe-runtime-proofs && cargo kani           # ~35 min; optional locally, mandatory in CI
+```
+
+A failing property names the violated invariant (e.g. `kani_authorize_property` → E6/E7
+typestate). Dependency policy is in `deny.toml` (crates.io only, no git deps, dual MIT/Apache,
+CVE deny).
 
 ---
 
 ## 7. Glossary (~70 terms)
 
-> **🇰🇷 한 줄:** 모르는 용어가 막히는 1순위 원인 — 한 줄 정의 모음.
+> **In one line:** one-line definitions for the project's terms — the #1 thing a newcomer gets stuck on.
 
 **Layers & boundary**
 - **L0 / L1 / L2 / L3** — Kernel (separate repo) / domain core / platform services / library (`arkhe-rand`). Shell is L4-L6 (separate repo).
@@ -295,21 +359,24 @@ Dependency policy is in `deny.toml` (crates.io only, no git deps, dual MIT/Apach
 - **Kernel boundary** — forge consumes the kernel; it never re-implements WAL append, authorization, or the `Effect<'i>` typestate.
 - **Bridge** — `bridge::kernel_compute`: the kernel-side `ActionCompute` (emitted by derive) that rebuilds an L1 context and runs forge `compute()`.
 - **Umbrella (`arkhe-forge`)** — the single facade crate shell authors depend on (version + feature coherence).
+- **InstanceView** — the kernel's read-only borrowed view into entity/component state; forge uses it for the C3 eligibility probe before dispatch.
 
 **Determinism & axioms**
 - **E-axioms (E1–E14)** — runtime invariants layered on the kernel's A-axioms. Inventory in `formal/axiom-test-cite.toml`.
 - **E14 Compute Determinism Closure** — two parts: **E14.L1** (build-time AST deny-list via `#[arkhe_pure]`) + **E14.L2** (runtime chain-hash determinism / canonical bytes).
 - **E13** — `audit.signature_class` is policy-pinned (never wire-sourced); Hybrid is sticky.
 - **E6 / E7** — typestate authorization (actor must be `Authenticated`) + shell-isolation (actor and target share a `ShellBrand`).
-- **Determinism Band** — `Band=1` Core (bit-identical, the only one safe for the kernel path today), `Band=2` Projection (eventually consistent), `Band=3` Protocol (shell-level).
+- **Determinism Band** — set at derive time via `#[arkhe(band=N)]`, immutable. **Band=1 (Core):** bit-identical replay, safe for the kernel path — use for any action that must replay identically (most user actions). **Band=2 (Projection):** eventually-consistent read-model updates (observer side). **Band=3 (Protocol):** shell-level semantic correctness, not used in L1+L2 today. Only Band=1 is currently safe to dispatch through the kernel.
 - **A1 / D1-Total** — the kernel's bit-identical replay guarantee, inherited unchanged.
 - **Subset-Rust / E14.L1-Deny** — the syntactic restriction (no clock/RNG/I/O/FFI/`unsafe`) enforced by `arkhe-subset-rust-check`.
 - **`#[arkhe_pure]`** — the attribute that runs the purity check on a `compute` body.
 
-**Domain primitives**
+**Domain primitives & lifecycle**
 - **User / Actor / Space / Entry / Activity** — the five L1 primitives.
 - **`ShellBrand<'s>`** — invariant-lifetime compile-time shell isolation (GhostCell pattern).
-- **Typestate (`ActorState`)** — sealed `Anonymous`/`Authenticated`/`Suspended`; transitions consume `self`.
+- **ActorState (typestate)** — `Actor<'s, S>` is parameterized by a sealed state `S ∈ {Anonymous, Authenticated, Suspended}`; transitions consume `self`. Anonymous has no `UserBinding`; Authenticated binds a user (subject to the C3 gate); Suspended rejects actions.
+- **UserGdprState** — a user's erasure lifecycle: `Active` → `ErasurePending` (right-to-erasure requested; new actor actions blocked by C3) → `Erased` (tombstoned).
+- **C3** — the GDPR `ErasurePending` admission gate at the L2 dispatch boundary (`dispatcher.rs:194-217`): before an action reaches the kernel/WAL, the authenticated actor's user is checked; if `ErasurePending`/`Erased`, dispatch is rejected (`DispatchError::ErasurePending`). (E-user-3 admission control.)
 - **Acting Actor** — the authenticated identity threaded from L2 dispatch into `ActionContext` (single source of truth; never from the wire — the C3 actor-substitution defense).
 - **Idempotency key** — optional `[u8;16]` dedup anchor; backed by a PG UNIQUE INDEX in production.
 - **TargetKey / Kind code** — activity target identity including `target_shell_id` (defeats cross-shell idempotency bypass).
@@ -356,7 +423,7 @@ Dependency policy is in `deny.toml` (crates.io only, no git deps, dual MIT/Apach
 
 ## 8. Where else to look
 
-> **🇰🇷 한 줄:** 더 깊이 — README(개요), 각 크레이트 README, formal/(E-공리·TLA+), docs/release-keys.md.
+> **In one line:** deeper references — the project README, each crate README, formal/, docs/release-keys.md.
 
 - `README.md` — project overview, the layer diagram, the E-axiom catalog, crypto stack.
 - Per-crate `README.md` — each crate documents its own surface (esp. `arkhe-forge-core`, `arkhe-forge-platform`, `arkhe-subset-rust-check`, `arkhe-rand`).
