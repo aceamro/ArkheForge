@@ -1,6 +1,6 @@
 [package]
 name          = "card-primitives"
-version       = "0.14.0"
+version       = "0.14.1"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Hold'em card primitives example — packed `Card` byte form, cursor-based `Deck` with Fisher-Yates shuffle, 9-category `HandRank` evaluator, BLAKE3 commit-reveal verifier, ArkheForge L1 Action/Event integration."

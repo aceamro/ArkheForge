@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge"
-version       = "0.14.0"
+version       = "0.14.1"
 edition       = "2021"
 rust-version.workspace = true
 description   = "ArkheForge Runtime umbrella crate: re-exports arkhe-forge-core (L1 primitives) + arkhe-forge-platform (L2 services). Shell authors depend on this crate only; compliance-tier features proxy through to the platform crate."

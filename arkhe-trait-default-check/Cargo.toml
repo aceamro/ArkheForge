@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-trait-default-check"
-version       = "0.14.0"
+version       = "0.14.1"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Lint crate for ArkheForge Runtime: detects semantic changes to trait default-method bodies via AST fingerprinting. Enforces the Minor-1 breaking-change rule in CI."

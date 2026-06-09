@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-forge"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-core",
  "arkhe-forge-platform",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-forge-core"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-macros",
  "arkhe-kernel",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-forge-macros"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-core",
  "arkhe-subset-rust-check",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-forge-platform"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "aes-gcm",
  "aes-gcm-siv",
@@ -141,9 +141,9 @@ dependencies = [
 
 [[package]]
 name = "arkhe-kernel"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67efc0a760380ef63ee3f1d11868fbedc0b06c6d19985004dbec316d2cb7320c"
+checksum = "1429be0ffdb30be4f30df1de952aa2e33f8040e07bb23dd4fbb4c78961dd234b"
 dependencies = [
  "arkhe-macros",
  "bitflags",
@@ -158,9 +158,9 @@ dependencies = [
 
 [[package]]
 name = "arkhe-macros"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19be4f3ce5e48093325fd21195719e469166d526118f451a51599c4dbd6e13a8"
+checksum = "44c2dad8e94c9dbc16556829303eff69736ca6dc48413409f64d698bc9326561"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-rand"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "blake3",
  "getrandom 0.2.17",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-runtime-testkit"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-core",
  "arkhe-kernel",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-subset-rust-check"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "arkhe-trait-default-check"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "blake3",
  "proc-macro2",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "card-primitives"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-core",
  "arkhe-forge-platform",
@@ -984,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "dice"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "arkhe-forge-core",
  "arkhe-forge-platform",
@@ -1691,9 +1691,9 @@ dependencies = [
 
 [[package]]
 name = "ml-dsa"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67011732d2747886c7b64f2eceef9d6eb2645a0aa528a26828b949ece257285"
+checksum = "add6b9d92e496f16f4526d68ff29da1483aba4b119baeab8bed3b9e3544a6f3d"
 dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.1",

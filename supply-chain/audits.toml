@@ -135,3 +135,19 @@ under the `tier-2-pqc-receipts` feature). Audit covers source-level
 safety so both the L0 kernel's WAL Hybrid AND-mode path and the L2
 audit-receipt verify path are audit-clean.
 """
+
+[[audits.ml-dsa]]
+who      = "cryptographer <noreply@arkheforge.invalid>"
+delta    = "0.1.0 -> 0.1.1"
+criteria = "safe-to-deploy"
+notes    = """
+Wire-neutral upstream patch (ml-dsa CHANGELOG 2026-06-05): a single
+Fixed entry — "enable module-lattice/alloc when the alloc feature is
+enabled" (#1365). The #1365 diff touches only the ml-dsa `Cargo.toml`
+[features] table (one feature-propagation line); no source,
+key-generation, signing, or encoding code changes. ML-DSA-65
+SigningKey / VerifyingKey / Signature byte layouts are unchanged, so the
+L0 WAL Hybrid AND-mode chain and the L2 `tier-2-pqc-receipts` verifier
+stay byte-compatible across the bump. Synced with ArkheKernel 0.14.1
+(`ml-dsa =0.1.1`) — kernel and forge advance together.
+"""

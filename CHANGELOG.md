@@ -6,6 +6,32 @@ minor epoch is cut on a substantive trigger (here: `ml-dsa` 0.1.0
 stabilisation → kernel v0.14). Version 1.0 is intentionally never
 reached (parity with ArkheKernel).
 
+## [0.14.1] — wire-neutral dependency maintenance
+
+Patch release on the same ArkheKernel v0.14 epoch, tracking ArkheKernel
+0.14.1. Mirroring the kernel, the persisted wire format, signature
+domains, and the code-level `SEMVER` epoch constants are frozen at the
+0.14 epoch — every 0.14 audit chain and L2 receipt replays and verifies
+bit-identically. Only the crate versions and the `ml-dsa` pin move; no
+runtime behaviour changes.
+
+### Changed
+- `ml-dsa` pin `=0.1.0` → `=0.1.1` (`arkhe-forge-platform`, gated
+  `tier-2-pqc-receipts`). The sole upstream change is a
+  `module-lattice/alloc` feature-propagation fix (#1365); ML-DSA-65
+  signature and key bytes are unchanged, so both the L0 WAL Hybrid path
+  and the L2 audit-receipt verifier stay byte-compatible across the bump.
+- Consumes `arkhe-kernel` / `arkhe-macros` 0.14.1. The `0.14` epoch pin is
+  unchanged; the lockfile resolves the patch.
+
+### Fixed
+- `arkhe_runtime_testkit::TESTKIT_SEMVER` epoch marker corrected
+  `(0, 12, 0)` → `(0, 14, 0)`; the constant had lagged two epochs.
+  Introspection-only — not serialised into any wire or hashed surface.
+
+### Licensing
+Dual-licensed under MIT OR Apache-2.0.
+
 ## [0.14.0] — ml-dsa epoch: PQC receipts, plugin removal, hardening
 
 Tracks the ArkheKernel v0.14 epoch (`ml-dsa` 0.1.0 / NIST FIPS 204 final).

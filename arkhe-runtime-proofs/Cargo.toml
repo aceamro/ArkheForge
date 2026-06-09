@@ -19,7 +19,7 @@
 
 [package]
 name        = "arkhe-runtime-proofs"
-version     = "0.14.0"
+version     = "0.14.1"
 edition     = "2021"
 description = "ArkheForge Runtime Kani harness crate"
 license     = "Apache-2.0 OR MIT"

@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge-macros"
-version       = "0.14.0"
+version       = "0.14.1"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Derive + attribute macros for ArkheForge Runtime: ArkheComponent / ArkheAction / ArkheEvent + #[arkhe_pure] (E14.L1 Subset-Rust purity). Validates TYPE_CODE ranges, BAND classification, schema_version field shape, and Action::compute purity at compile time."

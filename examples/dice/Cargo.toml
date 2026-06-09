@@ -1,6 +1,6 @@
 [package]
 name          = "dice"
-version       = "0.14.0"
+version       = "0.14.1"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Provably-fair 3D6 dice example — server commit + user-seed combined PRF + WAL persistence + multi-run history. Forge L1 + L2 framework integration."
