@@ -6,6 +6,11 @@
 //!   matching `examples/card_primitives/tests/statistical_rng_suite.rs`).
 //! - **P3 fill_bytes monotonic**: one fill of N bytes equals two
 //!   contiguous fills summing to N from the same seed.
+//! - **fill_bytes interleaving identity**: any chunking of reads emits
+//!   the same byte sequence as one contiguous read (exercises the
+//!   internal block-cache refill and bulk paths).
+//! - **split stream accounting**: `split()` consumes exactly the next
+//!   32 emitted stream bytes, at any cache offset.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -51,6 +56,65 @@ proptest! {
         b.fill_bytes(&mut combined[split_at..]);
 
         prop_assert_eq!(whole, combined);
+    }
+
+    /// Interleaving identity: any sequence of request sizes — empty,
+    /// sub-block, block-spanning, multi-block — emits the same byte
+    /// sequence as one contiguous fill of the total length.
+    #[test]
+    fn fill_bytes_interleaving_identity(
+        seed in any::<[u8; 32]>(),
+        chunks in proptest::collection::vec(0usize..=200, 1..=12),
+    ) {
+        let total: usize = chunks.iter().sum();
+        let mut a = RngSource::from_seed(&seed);
+        let mut b = RngSource::from_seed(&seed);
+
+        let mut whole = vec![0u8; total];
+        a.fill_bytes(&mut whole);
+
+        let mut pieced = vec![0u8; total];
+        let mut offset = 0;
+        for &c in &chunks {
+            b.fill_bytes(&mut pieced[offset..offset + c]);
+            offset += c;
+        }
+
+        prop_assert_eq!(whole, pieced);
+    }
+
+    /// `split()` consumes exactly the next 32 emitted stream bytes as
+    /// the child seed, regardless of how far a preceding fill advanced
+    /// the stream: the parent stays aligned with a fill-only twin, and
+    /// the child equals `from_seed` over those 32 bytes.
+    #[test]
+    fn split_consumes_exactly_32_stream_bytes(
+        seed in any::<[u8; 32]>(),
+        pre in 0usize..=80,
+    ) {
+        let mut a = RngSource::from_seed(&seed);
+        let mut b = RngSource::from_seed(&seed);
+
+        let mut scratch = vec![0u8; pre];
+        a.fill_bytes(&mut scratch);
+        b.fill_bytes(&mut scratch);
+
+        let mut child = a.split();
+        let mut child_seed = [0u8; 32];
+        b.fill_bytes(&mut child_seed);
+
+        let mut tail_a = [0u8; 48];
+        let mut tail_b = [0u8; 48];
+        a.fill_bytes(&mut tail_a);
+        b.fill_bytes(&mut tail_b);
+        prop_assert_eq!(tail_a, tail_b);
+
+        let mut expected_child = RngSource::from_seed(&child_seed);
+        let mut child_out = [0u8; 48];
+        let mut expected_out = [0u8; 48];
+        child.fill_bytes(&mut child_out);
+        expected_child.fill_bytes(&mut expected_out);
+        prop_assert_eq!(child_out, expected_out);
     }
 }
 

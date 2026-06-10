@@ -216,9 +216,11 @@ fn e11_cascade_scheduler_tick_advance_is_saturating() {
 }
 
 /// **E12** — `RuntimeBootstrap` is emitted as an in-band `Op::EmitEvent`
-/// entry so the `(runtime_semver, manifest_digest)` pair is folded into
-/// L0 chain hash. Replay drift rejects via `ReplayError::ManifestDrift`.
-///.
+/// entry, re-derived bit-identically on replay from the chain-recorded
+/// `Submit` inputs (the `(runtime_semver, manifest_digest)` pair rides
+/// the submitted action bytes). Header-level manifest drift rejects via
+/// `ReplayError::ManifestDigestMismatch` on the kernel's default replay
+/// path.
 #[test]
 fn e12_runtime_bootstrap_event_is_chain_anchored() {
     assert_eq!(
@@ -240,9 +242,10 @@ fn e12_runtime_bootstrap_event_is_chain_anchored() {
     assert_eq!(rb, back);
 }
 
-/// **E13** — Shell `[audit.signature_class]` policy is chain-anchored
-/// via `SignatureClassPolicy`. A Hybrid declaration at tick T forbids any
-/// Ed25519-only receipt at tick T+Δ..
+/// **E13** — Shell `[audit.signature_class]` policy is replay-anchored
+/// via `SignatureClassPolicy` (re-derived from chain-recorded `Submit`
+/// inputs). A Hybrid declaration at tick T forbids any Ed25519-only
+/// receipt at tick T+Δ.
 #[test]
 fn e13_signature_class_policy_anchored_by_type_code() {
     assert_eq!(

@@ -39,5 +39,9 @@ jobs:
       - run: cargo doc --workspace --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: Forbid native-endian conversions in arkhe-rand
+        run: |
+          hits=$(grep -rEn "from_ne_bytes|to_ne_bytes" arkhe-rand/src || true)
+          [ -z "$hits" ] || { echo "::error::Native-endian conversion in arkhe-rand/src: $hits"; exit 1; }
       - name: Verify axiom-cite mapping
         run: bash scripts/verify-axiom-cite.sh

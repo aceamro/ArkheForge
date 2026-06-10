@@ -19,9 +19,10 @@
 //! (golden hex vector covering header + length prefix + record
 //! section).
 //!
-//! All tests use synthetic record bytes — a postcard-encoded `seq:
-//! u64` followed by deterministic padding. Real WAL round-trip lives
-//! in `super::round_trip_tests` (Kernel-driven WAL bytes).
+//! All tests use synthetic record bytes — an arbitrary deterministic
+//! payload, opaque to the sink (the monotonic seq is passed explicitly
+//! on append and is not framed into the stream). Real WAL round-trip
+//! lives in `super::round_trip_tests` (Kernel-driven WAL bytes).
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
@@ -30,10 +31,11 @@ mod tests {
         buffered_sink::BufferedWalSink, WalRecordSink, MAX_RECORD_BYTES, STREAM_HEADER_MAGIC,
     };
 
-    /// Synthesize record bytes (postcard `seq: u64` + deterministic
-    /// padding). Matches the helper in [`buffered_sink::tests`].
-    fn synth_record(seq: u64, padding: usize) -> Vec<u8> {
-        let mut bytes = postcard::to_allocvec(&seq).unwrap();
+    /// Synthesize record payload bytes (postcard-encoded `marker: u64`
+    /// followed by deterministic padding). The payload is opaque to the
+    /// sink — the seq is passed explicitly on append.
+    fn synth_record(marker: u64, padding: usize) -> Vec<u8> {
+        let mut bytes = postcard::to_allocvec(&marker).unwrap();
         bytes.extend(std::iter::repeat(0u8).take(padding));
         bytes
     }
@@ -41,7 +43,7 @@ mod tests {
     /// Run a single-record export and return the writer's bytes.
     fn export_one_record(record: &[u8]) -> Vec<u8> {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        sink.append_record(record).expect("append OK");
+        sink.append_record(1, record).expect("append OK");
         sink.flush().expect("flush OK");
         sink.into_writer_for_test()
     }
@@ -49,8 +51,8 @@ mod tests {
     /// Run an N-record export and return the writer's bytes.
     fn export_records(records: &[Vec<u8>]) -> Vec<u8> {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        for r in records {
-            sink.append_record(r).expect("append OK");
+        for (i, r) in records.iter().enumerate() {
+            sink.append_record(i as u64 + 1, r).expect("append OK");
         }
         sink.flush().expect("flush OK");
         sink.into_writer_for_test()
@@ -67,8 +69,9 @@ mod tests {
     /// The slice `output[16..16+N]` must equal `input[..N]` bit-exact
     /// — no field reordering, no re-encoding, no transformation
     /// inside the streaming layer. This is the runtime-side
-    /// projection of L0 DO NOT TOUCH #7 (postcard field order on
-    /// `WalRecord`).
+    /// projection of L0 DO NOT TOUCH #7 (the kernel's frozen
+    /// kind-discriminated `WalRecord` postcard layout passes through
+    /// untouched).
     #[test]
     fn postcard_record_bytes_preserved_bit_exact() {
         let input = synth_record(0xABCD_1234, 64);
@@ -141,7 +144,7 @@ mod tests {
     #[test]
     fn length_prefix_uses_u64_big_endian_encoding() {
         // Choose payload with a non-trivial byte pattern: postcard
-        // varint of seq=1 = 1 byte (`0x01`) + 257 padding zeros = 258
+        // varint of marker=1 = 1 byte (`0x01`) + 257 padding zeros = 258
         // total bytes. BE prefix: [00 00 00 00 00 00 01 02] (= 0x0102).
         let input = synth_record(1, 257);
         assert_eq!(
@@ -164,7 +167,7 @@ mod tests {
     /// Catches any drift in derive-macro output, postcard varint
     /// encoding, framing layout, or constant values.
     ///
-    /// Input: synthetic 4-byte record `[seq=1 (postcard varint),
+    /// Input: synthetic 4-byte record `[marker=1 (postcard varint),
     /// 0xAB, 0xCD, 0xEF]` (1-byte varint for u64=1 + 3 padding
     /// bytes).
     ///
@@ -172,7 +175,7 @@ mod tests {
     #[test]
     fn stream_framing_golden_vector() {
         // Hand-construct the input: postcard u64 varint encoding of
-        // seq=1 is a single byte (0x01); pad with 3 deterministic
+        // marker=1 is a single byte (0x01); pad with 3 deterministic
         // bytes to reach a known total length.
         let mut input = postcard::to_allocvec(&1u64).unwrap();
         input.extend_from_slice(&[0xAB, 0xCD, 0xEF]);

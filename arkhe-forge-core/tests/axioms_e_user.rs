@@ -12,7 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use arkhe_forge_core::action::ActionCompute;
-use arkhe_forge_core::actor::{ActorId, UserBinding};
+use arkhe_forge_core::actor::{ActorId, ActorKind, ActorProfile, RegisterActor, UserBinding};
 use arkhe_forge_core::brand::ShellId;
 use arkhe_forge_core::component::{ArkheComponent, BoundedString};
 use arkhe_forge_core::context::{ActionContext, ActionError};
@@ -217,6 +217,109 @@ fn e_user_3_c3_erasing_actor_compute_rejects() {
         c.ops().len(),
         staged_ops,
         "compute must not push any Space Ops after the GDPR gate fires"
+    );
+}
+
+/// **E-user-3 C3 (compute-MC, production binding path)** — gate liveness
+/// through production actions only, no fixture writes: `RegisterActor`
+/// stages the actor → user `UserBinding`, `GdprEraseUser` stages
+/// `ErasurePending`, and a user-scoped compute by that actor rejects. This
+/// pins that the binding the gate resolves through has a production writer.
+#[test]
+fn e_user_3_c3_gate_is_live_through_production_binding() {
+    let user = UserId::new(eid(7));
+    let mut c = ctx();
+
+    RegisterActor {
+        schema_version: 1,
+        profile: ActorProfile {
+            schema_version: 1,
+            shell_id: ShellId([0xC3; 16]),
+            handle: BoundedString::<32>::new("alice").unwrap(),
+            kind: ActorKind::Human,
+            created_tick: Tick(100),
+        },
+        user,
+    }
+    .compute(&mut c)
+    .expect("register actor");
+    let actor_entity = c
+        .ops()
+        .iter()
+        .find_map(|op| match op {
+            arkhe_kernel::state::Op::SpawnEntity { id, .. } => Some(*id),
+            _ => None,
+        })
+        .expect("RegisterActor spawns the actor entity");
+
+    GdprEraseUser {
+        schema_version: 1,
+        user,
+    }
+    .compute(&mut c)
+    .expect("erase request");
+
+    let mut c = c.with_actor(Some(ActorId::new(actor_entity)));
+    let err = CreateSpace {
+        schema_version: 1,
+        config: SpaceConfigDraft {
+            schema_version: 1,
+            shell_id: ShellId([0xC3; 16]),
+            slug: BoundedString::<32>::new("forbidden").unwrap(),
+            kind: SpaceKind::Flat,
+            visibility: Visibility::Public,
+            parent_space: None,
+            created_tick: Tick(100),
+        },
+    }
+    .compute(&mut c)
+    .expect_err("erasure-pending user's actor must be rejected");
+    assert!(
+        matches!(err, ActionError::UserErasurePending { user: u, .. } if u == user),
+        "got {err:?}",
+    );
+}
+
+/// **E-user-3 C3 (compute-MC, fail-closed)** — a `UserBinding` that resolves
+/// to a user with NO `UserGdprState` rejects with
+/// `UserLifecycleUnresolved`: registration always seeds the pointer, so an
+/// actor bound to a never-registered user must not act (its erasure request
+/// would no-op against the never-spawned user entity, leaving the actor
+/// permanently ungateable if admitted).
+#[test]
+fn e_user_3_c3_binding_to_lifecycle_less_user_rejects() {
+    let user = UserId::new(eid(7));
+    let actor = ActorId::new(eid(8));
+
+    let mut c = ctx();
+    c.set_component(
+        actor.get(),
+        &UserBinding {
+            schema_version: 1,
+            user_id: user,
+        },
+    )
+    .expect("stage UserBinding");
+    // Deliberately NO UserGdprState for `user`.
+
+    let mut c = c.with_actor(Some(actor));
+    let err = CreateSpace {
+        schema_version: 1,
+        config: SpaceConfigDraft {
+            schema_version: 1,
+            shell_id: ShellId([0xC3; 16]),
+            slug: BoundedString::<32>::new("forbidden").unwrap(),
+            kind: SpaceKind::Flat,
+            visibility: Visibility::Public,
+            parent_space: None,
+            created_tick: Tick(100),
+        },
+    }
+    .compute(&mut c)
+    .expect_err("binding without lifecycle state must fail closed");
+    assert!(
+        matches!(err, ActionError::UserLifecycleUnresolved { user: u } if u == user),
+        "got {err:?}",
     );
 }
 

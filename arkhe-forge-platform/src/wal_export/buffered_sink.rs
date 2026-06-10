@@ -24,13 +24,14 @@
 //!
 //! # A14 append-only invariant — runtime-side enforcement
 //!
-//! L0 [`arkhe_kernel::persist::WalRecord`] places `seq: u64` as its
-//! first field; postcard encodes structs field-by-field in declaration
-//! order, so the first `take_from_bytes::<u64>` of the record bytes
-//! yields the seq without deserializing subsequent fields.
-//! [`append_record`](BufferedWalSink::append_record) extracts the seq
-//! and rejects out-of-order submissions with
-//! [`WalExportError::AppendOnlyViolation`].
+//! [`append_record`](BufferedWalSink::append_record) takes the record's
+//! kind-agnostic monotonic `seq` as an explicit argument and rejects
+//! out-of-order submissions with
+//! [`WalExportError::AppendOnlyViolation`]. Production callers read the
+//! seq through the typed `arkhe_kernel::WalRecord::seq()` accessor (see
+//! `wal_to_sink`), so the coupling to the L0 record schema is
+//! compiler-checked — the sink itself never parses payload bytes and is
+//! agnostic to the kernel's kind-discriminated `Submit`/`Step` layout.
 //!
 //! Initial seq is learned from the first `append_record` call (callers
 //! may stream from any record position; the sink does not require
@@ -84,7 +85,8 @@ pub struct BufferedWalSink<W: Write> {
     /// `[u64 BE length prefix][payload]` block per record.
     buffer: Vec<u8>,
     /// Maximum bytes the buffer may hold between flushes. Defaults to
-    /// [`Self::DEFAULT_CAPACITY`] (16 MiB).
+    /// [`Self::DEFAULT_CAPACITY`] (`MAX_RECORD_BYTES` + 16-byte framing
+    /// reserve).
     capacity: usize,
     /// `false` until the first `append_record` writes
     /// [`STREAM_HEADER_MAGIC`] into the buffer; `true` thereafter.
@@ -136,12 +138,13 @@ static_assertions::assert_not_impl_any!(BufferedWalSink<std::io::BufWriter<Vec<u
 static_assertions::assert_not_impl_any!(BufferedWalSink<std::io::Cursor<Vec<u8>>>: std::io::Seek);
 
 impl<W: Write> BufferedWalSink<W> {
-    /// Default in-memory buffer capacity (16 MiB) — matches the
-    /// absolute hard ceiling on a single record's framing
-    /// ([`MAX_RECORD_BYTES`]). Operators with tighter memory
-    /// constraints can pin a smaller buffer via
-    /// [`with_capacity`](Self::with_capacity).
-    pub const DEFAULT_CAPACITY: usize = 1 << 24;
+    /// Default in-memory buffer capacity — the absolute hard ceiling on
+    /// a single record ([`MAX_RECORD_BYTES`], 16 MiB) plus the 16-byte
+    /// framing overhead (8-byte stream header + 8-byte length prefix),
+    /// so a maximum-size legal record always fits a fresh sink.
+    /// Operators with tighter memory constraints can pin a smaller
+    /// buffer via [`with_capacity`](Self::with_capacity).
+    pub const DEFAULT_CAPACITY: usize = (MAX_RECORD_BYTES as usize) + 16;
 
     /// Construct a sink with [`DEFAULT_CAPACITY`](Self::DEFAULT_CAPACITY).
     pub fn new(writer: W) -> Self {
@@ -161,32 +164,6 @@ impl<W: Write> BufferedWalSink<W> {
             header_emitted: false,
             last_seq: None,
         }
-    }
-
-    /// Decode the leading `seq: u64` field (postcard varint) from the
-    /// record bytes — the first declared field of L0
-    /// [`arkhe_kernel::persist::WalRecord`]. Returns
-    /// [`InvalidFramingReason::Truncated`] if decoding fails (record
-    /// shorter than the seq field's varint encoding, ie. the bytes
-    /// were truncated mid-record).
-    ///
-    /// **L0 schema coupling — DO NOT TOUCH #7 sentinel**: this
-    /// function depends on `WalRecord` declaring `seq: u64` as its
-    /// FIRST field. postcard encodes structs field-by-field in
-    /// declaration order, so the first `take_from_bytes::<u64>` of
-    /// the record bytes yields seq without deserializing subsequent
-    /// fields. If a future schema migration reorders `WalRecord`
-    /// fields, the bridging test
-    /// `walrecord_leading_seq_invariant_bridge` (in `round_trip_tests`)
-    /// fails before any production wire damage occurs. The L0
-    /// invariant is `arkhe_kernel`'s "DO NOT TOUCH #7" anchor —
-    /// Runtime layer holds this `pub(super)` accessor so the bridge
-    /// test can verify the coupling without exposing the function to
-    /// crate-external consumers.
-    pub(super) fn extract_seq(record_bytes: &[u8]) -> Result<u64, WalExportError> {
-        let (seq, _rest): (u64, &[u8]) = postcard::take_from_bytes(record_bytes)
-            .map_err(|_| WalExportError::InvalidFraming(InvalidFramingReason::Truncated))?;
-        Ok(seq)
     }
 
     /// Validate the length prefix (firm requirement #2 — bounds-check
@@ -240,12 +217,11 @@ impl<W: Write> BufferedWalSink<W> {
 }
 
 impl<W: Write> WalRecordSink for BufferedWalSink<W> {
-    fn append_record(&mut self, record_bytes: &[u8]) -> Result<(), WalExportError> {
+    fn append_record(&mut self, seq: u64, record_bytes: &[u8]) -> Result<(), WalExportError> {
         // Step 1: validate length BEFORE any deref of payload bytes.
         let len = Self::validate_length(record_bytes)?;
 
-        // Step 2: extract seq + verify append-only ordering.
-        let seq = Self::extract_seq(record_bytes)?;
+        // Step 2: verify append-only ordering on the declared seq.
         if let Some(prev) = self.last_seq {
             // u64::MAX wraparound: `checked_add(1)` returns None →
             // explicit fail-secure via dedicated `SeqExhausted`
@@ -301,6 +277,12 @@ impl<W: Write> WalRecordSink for BufferedWalSink<W> {
     }
 
     fn flush(&mut self) -> Result<(), WalExportError> {
+        // Firm requirement #3: every flushed export stream begins with
+        // the header magic — emit it even when no record was appended,
+        // so an empty WAL round-trips as a valid header-only stream
+        // (the reader yields zero records) instead of a 0-byte file the
+        // reader rejects as HeaderMissing.
+        self.ensure_header();
         if self.buffer.is_empty() {
             return Ok(());
         }
@@ -318,24 +300,13 @@ impl<W: Write> WalRecordSink for BufferedWalSink<W> {
 mod tests {
     use super::*;
 
-    /// Synthesise record bytes that start with a postcard-encoded
-    /// `seq: u64` (the first declared field of L0
-    /// [`arkhe_kernel::persist::WalRecord`]) followed by `padding`
-    /// zero bytes representing the remaining fields. Sink contract
-    /// tests need only the leading `seq` for the append-only check;
-    /// payload contents are opaque to the sink. The
-    /// `round_trip_tests` module covers the real-WAL round-trip
-    /// end-to-end (Kernel-driven WAL bytes).
-    fn synth_record(seq: u64, padding: usize) -> Vec<u8> {
-        let mut bytes = postcard::to_allocvec(&seq).unwrap();
-        bytes.extend(std::iter::repeat(0u8).take(padding));
-        bytes
-    }
-
-    /// Build a sequence of records with seqs `1..=n`, each padded
-    /// with 16 bytes so the encoded size is non-trivial.
-    fn build_records(n: u64) -> Vec<Vec<u8>> {
-        (1..=n).map(|i| synth_record(i, 16)).collect()
+    /// Synthesise an opaque record payload of `len` deterministic
+    /// bytes. The sink never parses payload contents — the append-only
+    /// check runs on the explicitly passed `seq` — so any byte pattern
+    /// exercises the contract. The `round_trip_tests` module covers the
+    /// real-WAL round-trip end-to-end (Kernel-driven WAL bytes).
+    fn synth_record(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
     }
 
     /// Fresh sink — empty buffer, no header, no seq baseline.
@@ -358,36 +329,54 @@ mod tests {
     /// record + pins the baseline seq.
     #[test]
     fn first_append_emits_header_and_pins_seq() {
-        let records = build_records(1);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        sink.append_record(&records[0]).expect("first append OK");
+        sink.append_record(1, &record).expect("first append OK");
         assert!(sink.header_emitted);
         assert_eq!(sink.last_seq, Some(1));
-        // Buffer = magic (8) + length prefix (8) + record bytes (records[0].len()).
+        // Buffer = magic (8) + length prefix (8) + record bytes.
         assert!(sink.buffer.starts_with(&STREAM_HEADER_MAGIC));
     }
 
     /// Multi-record append in monotone-increasing seq order succeeds.
     #[test]
     fn multi_record_append_in_order_succeeds() {
-        let records = build_records(5);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        for (i, rec) in records.iter().enumerate() {
-            sink.append_record(rec)
-                .unwrap_or_else(|e| panic!("append #{i} failed: {e}"));
+        for seq in 1..=5 {
+            sink.append_record(seq, &record)
+                .unwrap_or_else(|e| panic!("append seq {seq} failed: {e}"));
         }
         assert_eq!(sink.last_seq, Some(5));
+    }
+
+    /// A fresh stream accepts any anchor seq (resume from an arbitrary
+    /// L0 WAL position) and then enforces strict succession from it.
+    #[test]
+    fn fresh_stream_accepts_arbitrary_anchor_then_enforces_succession() {
+        let record = synth_record(17);
+        let mut sink = BufferedWalSink::new(Vec::<u8>::new());
+        sink.append_record(41, &record).expect("anchor seq OK");
+        let result = sink.append_record(43, &record);
+        assert!(matches!(
+            result,
+            Err(WalExportError::AppendOnlyViolation {
+                expected_seq: 42,
+                got_seq: 43,
+                previous_seq: Some(41),
+            })
+        ));
     }
 
     /// Out-of-sequence seq trips `AppendOnlyViolation` — verifies
     /// the `previous_seq: Some(prev)` forensic field.
     #[test]
     fn out_of_order_seq_rejected_with_append_only_violation() {
-        let records = build_records(3);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        sink.append_record(&records[0]).expect("seq 1 OK");
+        sink.append_record(1, &record).expect("seq 1 OK");
         // Skip seq 2; submit seq 3 — should reject.
-        let result = sink.append_record(&records[2]);
+        let result = sink.append_record(3, &record);
         match result {
             Err(WalExportError::AppendOnlyViolation {
                 expected_seq,
@@ -407,10 +396,10 @@ mod tests {
     /// reflects the current high-water mark.
     #[test]
     fn duplicate_seq_rejected_with_append_only_violation() {
-        let records = build_records(2);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        sink.append_record(&records[0]).expect("seq 1 OK");
-        let result = sink.append_record(&records[0]);
+        sink.append_record(1, &record).expect("seq 1 OK");
+        let result = sink.append_record(1, &record);
         assert!(matches!(
             result,
             Err(WalExportError::AppendOnlyViolation {
@@ -425,28 +414,11 @@ mod tests {
     #[test]
     fn empty_record_rejected_with_length_zero() {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        let result = sink.append_record(&[]);
+        let result = sink.append_record(1, &[]);
         assert!(matches!(
             result,
             Err(WalExportError::InvalidFraming(
                 InvalidFramingReason::LengthZero
-            ))
-        ));
-    }
-
-    /// Truncated postcard record (too short to extract seq) rejected
-    /// with `Truncated`.
-    #[test]
-    fn truncated_record_rejected_with_truncated() {
-        let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        // Single byte = invalid postcard u64 varint encoding (varint
-        // for non-trivial u64 needs continuation). 0xFF alone signals
-        // continuation but no follower → Truncated.
-        let result = sink.append_record(&[0xFF]);
-        assert!(matches!(
-            result,
-            Err(WalExportError::InvalidFraming(
-                InvalidFramingReason::Truncated
             ))
         ));
     }
@@ -458,13 +430,13 @@ mod tests {
     /// requested > capacity` is what triggers).
     #[test]
     fn buffer_overflow_rejected_with_capacity() {
-        let records = build_records(10);
+        let record = synth_record(17);
         // Capacity just enough for the header + one record's frame.
-        let single_frame = 8 + records[0].len();
+        let single_frame = 8 + record.len();
         let cap = STREAM_HEADER_MAGIC.len() + single_frame;
         let mut sink = BufferedWalSink::with_capacity(Vec::<u8>::new(), cap);
-        sink.append_record(&records[0]).expect("first record fits");
-        let result = sink.append_record(&records[1]);
+        sink.append_record(1, &record).expect("first record fits");
+        let result = sink.append_record(2, &record);
         match result {
             Err(WalExportError::BufferOverflow {
                 capacity,
@@ -472,7 +444,7 @@ mod tests {
                 current_buffer,
             }) => {
                 assert_eq!(capacity, cap);
-                assert_eq!(requested, 8 + records[1].len());
+                assert_eq!(requested, 8 + record.len());
                 // Buffer holds magic + first record's full frame at
                 // overflow check time.
                 assert_eq!(current_buffer, STREAM_HEADER_MAGIC.len() + single_frame);
@@ -487,10 +459,10 @@ mod tests {
     /// writer and clears the buffer.
     #[test]
     fn flush_writes_buffer_to_writer_and_clears() {
-        let records = build_records(3);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        for rec in &records {
-            sink.append_record(rec).expect("append OK");
+        for seq in 1..=3 {
+            sink.append_record(seq, &record).expect("append OK");
         }
         let buffered_len = sink.buffer.len();
         sink.flush().expect("flush OK");
@@ -503,23 +475,39 @@ mod tests {
         assert!(sink.writer.starts_with(&STREAM_HEADER_MAGIC));
     }
 
-    /// `flush` on an empty sink (no appends) is a no-op — does not
-    /// emit a header, does not touch the writer.
+    /// `flush` on a record-less sink emits a header-only stream — an
+    /// empty WAL exports as a valid self-describing stream (firm
+    /// requirement #3) that the reader opens and reads as zero records.
+    /// A second flush adds nothing.
     #[test]
-    fn empty_flush_is_idempotent_noop() {
+    fn empty_flush_emits_header_only_stream() {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
         sink.flush().expect("empty flush OK");
-        assert!(sink.writer.is_empty());
-        assert!(!sink.header_emitted);
+        assert_eq!(sink.writer, STREAM_HEADER_MAGIC.to_vec());
+        assert!(sink.header_emitted);
+        sink.flush().expect("second empty flush OK");
+        assert_eq!(sink.writer, STREAM_HEADER_MAGIC.to_vec());
+    }
+
+    /// `DEFAULT_CAPACITY` reserves the 16-byte framing overhead above
+    /// the per-record ceiling so a maximum-size legal record fits a
+    /// fresh sink (8-byte header + 8-byte length prefix +
+    /// `MAX_RECORD_BYTES` payload).
+    #[test]
+    fn default_capacity_admits_a_max_size_record_frame() {
+        assert_eq!(
+            BufferedWalSink::<Vec<u8>>::DEFAULT_CAPACITY,
+            (MAX_RECORD_BYTES as usize) + 8 + 8
+        );
     }
 
     /// Double `flush` after appends — second flush is a no-op.
     #[test]
     fn double_flush_is_idempotent() {
-        let records = build_records(2);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        sink.append_record(&records[0]).expect("append OK");
-        sink.append_record(&records[1]).expect("append OK");
+        sink.append_record(1, &record).expect("append OK");
+        sink.append_record(2, &record).expect("append OK");
         sink.flush().expect("first flush OK");
         let writer_len_after_first = sink.writer.len();
         sink.flush().expect("second flush OK");
@@ -533,10 +521,10 @@ mod tests {
     /// Stream header is emitted exactly once across multiple appends.
     #[test]
     fn header_emitted_exactly_once() {
-        let records = build_records(3);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        for rec in &records {
-            sink.append_record(rec).expect("append OK");
+        for seq in 1..=3 {
+            sink.append_record(seq, &record).expect("append OK");
         }
         // Count occurrences of the magic bytes in the buffer.
         let count = sink
@@ -554,14 +542,14 @@ mod tests {
     /// real-world stream, but the structural reject must hold.
     #[test]
     fn seq_wraparound_at_u64_max_rejected_with_seq_exhausted() {
-        let records = build_records(1);
+        let record = synth_record(17);
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
         // Manually pin the boundary state — there is no public API to
         // reach u64::MAX in production (saturating_add caps in L0),
         // but the structural reject must hold.
         sink.last_seq = Some(u64::MAX);
         sink.header_emitted = true; // already-active stream
-        let result = sink.append_record(&records[0]);
+        let result = sink.append_record(0, &record);
         match result {
             Err(WalExportError::SeqExhausted { last_seq }) => {
                 assert_eq!(last_seq, u64::MAX);
@@ -598,14 +586,23 @@ mod tests {
         }
     }
 
-    /// Sanity: `extract_seq` returns the seq value from a real
-    /// postcard-encoded WalRecord.
+    /// The sink is payload-agnostic: bytes that do not decode as any
+    /// postcard shape are framed verbatim — only the declared seq and
+    /// the length bounds gate an append.
     #[test]
-    fn extract_seq_round_trips_through_postcard() {
-        let records = build_records(7);
-        for (i, rec) in records.iter().enumerate() {
-            let seq = BufferedWalSink::<Vec<u8>>::extract_seq(rec).expect("decode OK");
-            assert_eq!(seq, (i as u64) + 1);
-        }
+    fn append_record_frames_arbitrary_payload_bytes_verbatim() {
+        // 0xFF repeated is an unterminated postcard varint — under the
+        // old payload-parsing design this was rejected; the framing
+        // layer now passes it through untouched.
+        let record = vec![0xFFu8; 9];
+        let mut sink = BufferedWalSink::new(Vec::<u8>::new());
+        sink.append_record(1, &record).expect("opaque payload OK");
+        sink.flush().expect("flush OK");
+        let frame_start = STREAM_HEADER_MAGIC.len() + 8;
+        assert_eq!(
+            &sink.writer[frame_start..frame_start + record.len()],
+            record.as_slice(),
+            "payload bytes pass through bit-exact"
+        );
     }
 }

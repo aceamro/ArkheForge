@@ -2,9 +2,153 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Versioning scheme — the version tracks the ArkheKernel epoch. A new
-minor epoch is cut on a substantive trigger (here: `ml-dsa` 0.1.0
-stabilisation → kernel v0.14). Version 1.0 is intentionally never
-reached (parity with ArkheKernel).
+minor epoch is cut on a substantive trigger (here: the kernel's
+Canonical Input Log restructure → kernel v0.15). Version 1.0 is
+intentionally never reached (parity with ArkheKernel).
+
+## [0.15.0] — Canonical Input Log epoch sync (wire-format-breaking)
+
+Epoch release tracking ArkheKernel v0.15.0, whose WAL is restructured
+into a Canonical Input Log: one `Submit` record per externally admitted
+action and one `Step` record (verdict + post-state digest) per pop, with
+every deterministic effect re-derived on replay by re-executing
+`compute()`. A 0.14-epoch WAL does not replay under 0.15 and 0.14-signed
+L2 receipts verify only under 0.14 binaries (forward-only, pre-public).
+The forge epoch surfaces advance in lockstep: `RUNTIME_SEMVER` /
+`PLATFORM_SEMVER` / `SEMVER` / `TESTKIT_SEMVER` `(0, 15, 0)` and
+`FORGE_RECEIPT_SIG_DOMAIN` `arkhe-forge v0.15 …`.
+
+### Changed
+- Consumes `arkhe-kernel` / `arkhe-macros` 0.15 (epoch pin `0.14` →
+  `0.15`). One `RuntimeService::dispatch` now appends a Submit + Step
+  record pair; `Kernel::submit` is called with the dispatch `caps` as
+  the per-submission capability ceiling (recorded on the Submit record)
+  and `Kernel::step` with the same `caps` as the operator session
+  ceiling. Under the kernel's unified capability model
+  (`effective_caps(default_caps, principal, ceiling)` ∩ session
+  ceiling, no `Principal::System` bypass) the L2 gate posture is
+  unchanged: capability denial still surfaces via
+  `StepReport::effects_denied`.
+- `WalRecordSink::append_record` takes the record's kind-agnostic
+  monotonic `seq` as an explicit argument; `wal_to_sink` reads it
+  through the typed `WalRecord::seq()` accessor. The sink no longer
+  parses kernel record bytes (the v0.14 design decoded the leading
+  postcard field, which the kind-discriminated v0.15 layout turns into
+  the content tag) — the L0 schema coupling is now compiler-checked at
+  the producer call site and the framing layer is fully
+  payload-agnostic. The `ARKHEXP1` stream format itself is unchanged:
+  magic, `u64` BE length prefix, and record-section bit-exactness all
+  hold byte-for-byte.
+- `examples/dice` history loading filters `Submit` records (Step
+  records carry no action bytes), so roll/nonce derivation is stable
+  over the two-record dispatch shape; a pre-0.15 `dice.wal` is a
+  different wire epoch (`--reset` clears it).
+
+### Added
+- `RegisterActor` (`arkhe-forge-core`, type code `0x0001_0101`) — the
+  production actor-registration action: spawns the actor entity and
+  attaches `ActorProfile` + `UserBinding` with the spawn-then-set
+  discipline, enforcing the E-actor-3 handle-collision gate. This is
+  the binding path that makes the E-user-3 C3 GDPR admission gate live
+  in production: `ensure_actor_eligible` resolves actor → user through
+  the `UserBinding` this action writes, and the end-to-end liveness
+  test now drives only production actions (`RegisterUser` →
+  `RegisterActor` → `GdprEraseUser` → rejection before `submit`). The
+  gate also fails closed on a resolved binding whose user has no
+  `UserGdprState` (`ActionError::UserLifecycleUnresolved`, surfaced as
+  `DispatchError::UnboundUserLifecycle`): an actor bound to a
+  never-registered user — whose erasure request would no-op — is
+  rejected at admission instead of becoming permanently ungateable.
+- `ensure_schema_version` (`arkhe-forge-core::context`) — every
+  production `compute()` body validates each wire-supplied
+  `schema_version` field against the type's canonical constant as its
+  first check and rejects mismatches with
+  `ActionError::SchemaMismatch` (previously a dead variant; wire
+  values were persisted verbatim).
+
+### Fixed
+- `ProjectionRouter` event dedup keyed on the per-compute
+  `EventRecord.sequence`, which restarts at 0 for every action — the
+  second of two successive actions' events was silently dropped as a
+  duplicate. The router now tracks a composite `(tick, sequence)`
+  stream cursor (tick-major): redelivery of the same position is a
+  no-op only when the event identity (type code + payload) matches — a
+  DIFFERENT event at the cursor position (same-tick compute collision)
+  rejects loudly with the new `PositionConflict` variant; distinct
+  computes' events all apply; `SequenceBackward`/`SequenceGap` carry
+  full `ProjectionCursor` positions; and a failed fan-out — first or
+  mid-stream — pins the unapplied event's position AND identity, so a
+  skip-ahead cannot silently advance past the lost event and a
+  different event at the failed position cannot be absorbed as its
+  retry.
+- `ObserverState::Draining` is terminal as documented: the single
+  transition gate now rejects `Draining → Passive → Active`
+  resurrection.
+- `wal_to_sink` streams within the sink capacity: on `BufferOverflow`
+  it flushes mid-stream and retries, so a WAL of any size exports
+  through a bounded-memory sink (previously any WAL above the sink
+  capacity hard-failed with nothing written, and re-running tripped
+  `AppendOnlyViolation`). `BufferedWalSink::DEFAULT_CAPACITY` reserves
+  the 16-byte framing overhead so a maximum-size legal record fits a
+  fresh sink, and `flush` emits the stream header even for a
+  record-less export — an empty WAL round-trips as a valid header-only
+  stream instead of a 0-byte file the reader rejects.
+- The `#[arkhe_pure]` purity gate closes four bypass routes: imported
+  associated paths (`use std::time::Instant; Instant::now()`) via
+  segment-aligned suffix matching, leading-colon paths
+  (`::std::fs::…`) via normalisation, denied paths inside macro
+  arguments (`vec!`/`format!` recursion + a denied-I/O-macro list for
+  `println!`-family/`dbg!`), and `unsafe fn` signatures (edition-2021
+  implicit unsafe bodies).
+- The `ActionCompute` purity-coverage scanner recurses through fn-body
+  items via a `syn` visitor (nested impls were invisible), with an
+  exact-form `#[cfg(test)]`-module exemption; both workspace scanners
+  now fail loudly on unreadable/unparseable files instead of silently
+  skipping.
+- `arkhe-rand` usize sampling is pointer-width independent: it routes
+  through the u64 Lemire path unconditionally, so the same seed yields
+  one `shuffle` permutation on 64-bit and 32-bit (wasm32) targets
+  (previously values and stream consumption diverged). A golden
+  52-element permutation and a usize/u64 identity test pin the
+  contract; the crate's determinism docs now cite exactly the
+  enforcement that exists (host golden vector, CI native-endian
+  self-grep) rather than an aspirational cross-compile matrix.
+- `combine_shares` validates the threshold config up front, returning
+  `InvalidConfig` instead of panicking on an empty share set with
+  `t = 0`.
+- The L2 GDPR admission-gate integration test seeds its actor/user
+  entities with explicit spawns: the kernel ledger now no-ops a
+  `SetComponent` against a never-spawned entity (a v0.14 phantom-write
+  hole), and the production `RegisterUser` → `GdprEraseUser` path
+  already satisfies the existence precondition by spawning the user
+  entity at registration.
+
+### Security
+- Secret-scrubbing hardening (the same in-memory-copy class the kernel
+  0.15 release fixed): `ReceiptSigner::mldsa65_from_seed` zeroizes the
+  transient `B32` seed conversion; `CryptoCoordinator` wraps decrypted
+  and pre-encryption PII plaintext buffers in `Zeroizing` (including
+  every per-element plaintext during `rotate_dek`); the AWS KMS
+  backend wipes its stack DEK copies after `Dek` construction.
+- Linux `disable_ptrace` fails closed when `/proc/self/status` is
+  unreadable (hidepid/sandbox procfs): an unknown tracer state is now
+  an error instead of a silent pass, preserving the documented
+  "Ok ⇒ no debugger attached" guarantee.
+
+### Performance
+- `RngSource` serves draws from a 64-byte XOF block cache instead of
+  recomputing a BLAKE3 output block per 4/8-byte draw — measured 5.7×
+  on `gen_range`, 5.8× on a 52-card shuffle; the emitted byte stream
+  is bit-identical (golden vectors unchanged).
+- `StreamingWalReader` buffers its source internally (`BufReader`), so
+  file-backed reads no longer pay three raw `read` syscalls per record
+  (measured 43× on a 1k-record file stream).
+- `wal_to_sink` reuses one encode scratch across records
+  (`postcard::to_extend`) instead of allocating a fresh `Vec` per
+  record — measured 3.3× on the export loop, byte-identical output.
+
+### Licensing
+Dual-licensed under MIT OR Apache-2.0.
 
 ## [0.14.1] — wire-neutral dependency maintenance
 

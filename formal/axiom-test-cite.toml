@@ -14,7 +14,7 @@
 schema_version = 1
 formal_method_anchors_local = "formal/tla-plus/{runtime_core,r4_implementation_refinement}.tla"
 formal_method_anchors_kernel = "../ArkheKernel/formal/tla-plus/{cr1_chain_hash_invariant,cr2_state_machine_refinement,cr3_replay_determinism,cr4_observer_capability_confinement}.tla"
-cycle = "v0.14"
+cycle = "v0.15"
 
 # ============================================================
 # Cryptographic refinement primitive class siblings
@@ -181,7 +181,7 @@ impl_tests = [
     # potential A1 bit-identical replay violation") direct closure.
     # Pins the postcard wire bytes for ArkheComponent + ArkheEvent
     # derive emission via synthetic test fixtures. Component/Event
-    # canonical_bytes feed into WalRecord.action_bytes (chain hash
+    # canonical_bytes feed into WalRecordContent::Submit::action_bytes (chain hash
     # upstream) — a postcard re-encoding shift breaks these assertions
     # before the divergence reaches a chain hash mismatch (A1 + A14
     # subset coverage; full Layer A item 3 protection in
@@ -261,7 +261,7 @@ property_statement = "AND-mode dispatch — both Ed25519 AND ML-DSA 65 verify mu
 # Layer A 7 items consolidated
 # ============================================================
 [formal_verification_inventory]
-cycle = "v0.14"
+cycle = "v0.15"
 sub_steps_closed = 9
 formal_modules = 6
 tla_invs = 11

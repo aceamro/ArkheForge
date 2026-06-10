@@ -5,11 +5,11 @@ use std::collections::BTreeSet;
 use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use serde::{Deserialize, Serialize};
 
-use crate::action::ActionCompute;
+use crate::action::{ActionCompute, ArkheAction as _};
 use crate::actor::ActorId;
 use crate::brand::ShellId;
-use crate::component::BoundedString;
-use crate::context::{ActionContext, ActionError};
+use crate::component::{ArkheComponent as _, BoundedString};
+use crate::context::{ensure_schema_version, ActionContext, ActionError};
 use crate::ArkheAction;
 use crate::ArkheComponent;
 // E14.L1-Deny enforcement on Action::compute.
@@ -186,6 +186,12 @@ pub struct CreateSpace {
 impl ActionCompute for CreateSpace {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Validate-then-copy: wire schema versions are checked against the
+        // canonical constants before any other gate, so a stale or forged
+        // version never reaches the stored config.
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
+        ensure_schema_version(SpaceConfig::SCHEMA_VERSION, self.config.schema_version)?;
+
         // Single source of truth: the creating actor is the authenticated
         // identity the runtime injected at dispatch — never a wire field.
         // A user-scoped action with no injected actor cannot proceed.
@@ -345,6 +351,64 @@ mod tests {
             injected,
             "recorded creator must equal the injected acting actor",
         );
+    }
+
+    #[test]
+    fn create_space_rejects_wire_schema_mismatch() {
+        use crate::action::ActionCompute;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+        .with_actor(Some(ActorId::new(ent(0xC1))));
+
+        // Action-level wire field — first check, fires before the auth gate.
+        let mut act = CreateSpace {
+            schema_version: 0xBEEF,
+            config: draft(),
+        };
+        let err = act
+            .compute(&mut c)
+            .expect_err("wire schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Nested config field — validated before the copy into the stored
+        // SpaceConfig.
+        act.schema_version = 1;
+        act.config.schema_version = 0xBEEF;
+        let err = act
+            .compute(&mut c)
+            .expect_err("config schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Matching versions proceed.
+        act.config.schema_version = 1;
+        act.compute(&mut c).expect("matching versions → Ok");
     }
 
     #[test]

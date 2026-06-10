@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-rand"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "BLAKE3-keyed PRNG with split() determinism — Lemire unbiased range + Fisher-Yates shuffle. Shell-side use (kernel/runtime forbids RNG for deterministic replay)."

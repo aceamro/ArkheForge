@@ -14,10 +14,11 @@ use arkhe_kernel::abi::{EntityId, Tick, TypeCode};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use crate::action::ActionCompute;
+use crate::action::{ActionCompute, ArkheAction as _};
 use crate::actor::ActorId;
 use crate::brand::{ShellBrand, ShellId};
-use crate::context::{ActionContext, ActionError};
+use crate::component::ArkheComponent as _;
+use crate::context::{ensure_schema_version, ActionContext, ActionError};
 use crate::entry::EntryId;
 use crate::space::SpaceId;
 use crate::ArkheAction;
@@ -238,7 +239,9 @@ pub enum ActivityStatus {
 }
 
 /// Storage-safe Activity record. `'static`, postcard-DeserializeOwned,
-/// brand-free — this is what the WAL stores and observers read (C1 contract).
+/// brand-free — this is what instance state stores and observers read
+/// (C1 contract; chain-anchored via the `Submit` record's action bytes
+/// + the `Step` record's post-state digest).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheComponent)]
 #[arkhe(type_code = 0x0003_0401, schema_version = 1)]
 pub struct ActivityRecord {
@@ -405,6 +408,12 @@ pub struct RetractActivity {
 impl ActionCompute for SubmitActivity {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Validate-then-copy: wire schema versions are checked against the
+        // canonical constants before any other gate, so a stale or forged
+        // version never reaches the stored record.
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
+        ensure_schema_version(ActivityRecord::SCHEMA_VERSION, self.draft.schema_version)?;
+
         // Single source of truth: the acting actor is the authenticated
         // identity the runtime injected at dispatch — never a wire field.
         // A user-scoped action with no injected actor cannot proceed.
@@ -446,6 +455,7 @@ impl ActionCompute for SubmitActivity {
 impl ActionCompute for RetractActivity {
     #[arkhe_pure]
     fn compute<'i>(&self, _ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
         // The host reads the existing `ActivityRecord` via
         // `ctx.read::<C>(activity_id)`, produces a tombstone variant, and
         // pushes `Op::SetComponent` with the updated status + index delta.
@@ -626,6 +636,110 @@ mod tests {
             .expect_err("no injected actor must reject");
         assert!(matches!(err, ActionError::AuthorizationFailed(_)));
         assert!(c.ops().is_empty(), "no Ops on rejection");
+    }
+
+    #[test]
+    fn submit_activity_rejects_wire_schema_mismatch() {
+        use crate::context::ActionContext;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let mut submit = SubmitActivity {
+            schema_version: 0xBEEF,
+            draft: ActivityDraft {
+                schema_version: 1,
+                shell_id: ShellId([0u8; 16]),
+                verb: VerbCode::canonical(canonical_verbs::LIKE),
+                target: TargetKind::Entry(EntryId::new(ent(2))),
+                at_tick: Tick(0),
+                status: ActivityStatus::Active,
+                extra_bytes: Bytes::new(),
+            },
+            idempotency_key: None,
+        };
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+        .with_actor(Some(ActorId::new(ent(0xAC))));
+
+        // Action-level wire field — first check, fires before the auth gate.
+        let err = submit
+            .compute(&mut c)
+            .expect_err("wire schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Nested draft field — same gate, validated before the copy into
+        // the stored ActivityRecord.
+        submit.schema_version = 1;
+        submit.draft.schema_version = 0xBEEF;
+        let err = submit
+            .compute(&mut c)
+            .expect_err("draft schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Matching versions proceed.
+        submit.draft.schema_version = 1;
+        submit.compute(&mut c).expect("matching versions → Ok");
+    }
+
+    #[test]
+    fn retract_activity_rejects_wire_schema_mismatch() {
+        use crate::context::ActionContext;
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+
+        let mut c = ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        );
+        let err = RetractActivity {
+            schema_version: 0xBEEF,
+            activity: ActivityId::new(ent(5)),
+        }
+        .compute(&mut c)
+        .expect_err("wire schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+
+        RetractActivity {
+            schema_version: 1,
+            activity: ActivityId::new(ent(5)),
+        }
+        .compute(&mut c)
+        .expect("matching version → Ok");
     }
 
     #[test]

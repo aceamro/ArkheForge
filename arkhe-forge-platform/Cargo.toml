@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge-platform"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "L2 services for ArkheForge Runtime: projection observer, manifest loader, policy, rate limiter, audit receipts, crypto-erasure coordinator, process-protection shim. Builds on L0 arkhe-kernel + L1 arkhe-forge-core."
@@ -14,8 +14,8 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-kernel        = "0.14"
-arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.14" }
+arkhe-kernel        = "0.15"
+arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.15" }
 serde               = { workspace = true }
 postcard            = { workspace = true }
 blake3              = { workspace = true }

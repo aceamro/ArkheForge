@@ -66,7 +66,7 @@ The five supporting modules build bottom-up to `main.rs`:
 
 ## How it works
 
-Stage-by-stage breakdown, anchored to `main.rs:79..344`:
+Stage-by-stage breakdown, anchored to `main.rs:79..374`:
 
 1. **Dealer broadcast** — pick a 32-byte seed, compute
    `ShuffleCommitment::from_seed(&seed)`, broadcast the 32-byte
@@ -91,12 +91,14 @@ Stage-by-stage breakdown, anchored to `main.rs:79..344`:
    `HandShowdownLanded` event payload contains the same
    `chain_hash` the audience computed off-runtime.
 7. **Forge L2 dispatch** — the same `RecordHandShowdown` action goes
-   through `RuntimeService::dispatch`, which submits it to the
-   kernel, runs the `step()` authorize → execute → WAL append loop,
-   and returns a `StepReport` (`actions_executed=1`,
-   `effects_applied=1`).
+   through `RuntimeService::dispatch`, which submits it to the kernel
+   (appending a WAL `Submit` record), runs the `step()` authorize →
+   execute loop (appending a `Step` record with the verdict +
+   post-state digest), and returns a `StepReport`
+   (`actions_executed=1`, `effects_applied=1`).
 8. **WAL export** — `service.export_wal()` consumes the kernel and
-   yields a `Wal` value; `wal_to_sink(&wal, &mut BufferedWalSink::new(&mut Vec<u8>))`
+   yields a `Wal` value holding the Submit + Step record pair;
+   `wal_to_sink(&wal, &mut BufferedWalSink::new(&mut Vec<u8>))`
    writes the canonical `ARKHEXP1` framed stream into a byte buffer.
 9. **Streaming round-trip** — those bytes are read back through
    `StreamingWalReader::open_v1`; each recovered `WalRecord`

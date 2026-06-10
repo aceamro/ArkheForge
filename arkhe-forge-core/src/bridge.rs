@@ -5,8 +5,10 @@
 //! delegates to [`kernel_compute`] (this module). The bridge
 //! reconstructs a forge [`ActionContext`] from the kernel's read-only
 //! view, runs the forge compute body, and drains the resulting
-//! `Vec<Op>` back to the kernel for its authorize → dispatch → WAL
-//! append loop in `Kernel::step`.
+//! `Vec<Op>` back to the kernel for its authorize → dispatch loop in
+//! `Kernel::step` (`Kernel::submit` appends the WAL `Submit` record at
+//! admission; `step` appends one `Step` record — verdict + post-state
+//! digest — per pop).
 //!
 //! ## Known limitations
 //!
@@ -25,23 +27,25 @@
 //!
 //! 2. **Principal / capabilities pinned to
 //!    `Principal::System` / `CapabilityMask::SYSTEM` here.** The
-//!    kernel re-authorizes every drained `Op` against the
-//!    caller-supplied caps in `Kernel::step`, so the bridge's pinned
-//!    values cannot relax the security gate — they are local to the
-//!    forge-side compute body. A forge compute that branches on
-//!    [`ActionContext::principal`] will see `System`. The caller
-//!    principal is not exposed through the kernel `ActionContext`
-//!    accessor.
+//!    kernel authorizes every drained `Op` against
+//!    `effective_caps(default_caps, principal, ceiling)` intersected
+//!    with the operator session ceiling — `Principal::System` holds no
+//!    blanket bypass — so the bridge's pinned values cannot relax the
+//!    security gate; they are local to the forge-side compute body. A
+//!    forge compute that branches on [`ActionContext::principal`] will
+//!    see `System`. The caller principal is not exposed through the
+//!    kernel `ActionContext` accessor.
 //!
 //! 3. **Forge `compute()` returning `Err(ActionError)` is suppressed
 //!    to an empty `Vec<Op>`.** The kernel sees an action that
-//!    produced no Ops; the `WalRecord` envelope still records the
-//!    submission but with empty `stage.events`. A future release that
-//!    surfaces the rejection via a dedicated `EffectFailed` kernel
-//!    event will let callers distinguish "action rejected" from
-//!    "action accepted but no-op". The audit-completeness gap
-//!    (rejections invisible in the WAL stream) is tracked as a
-//!    future hardening carry.
+//!    produced no Ops; the WAL holds the `Submit` record plus an
+//!    effect-free `Step` record whose verdict is
+//!    `StepVerdict::Committed` — indistinguishable from "action
+//!    accepted but no-op". A future release that surfaces the
+//!    rejection via a dedicated `EffectFailed` kernel event will let
+//!    callers distinguish the two. The audit-completeness gap
+//!    (forge-level rejections invisible in the verdict stream) is
+//!    tracked as a future hardening carry.
 //!
 //! 4. **Viewless context — the in-compute GDPR `ErasurePending` gate
 //!    soft-passes here.** The bridge builds an
@@ -54,7 +58,12 @@
 //!    (forge-platform), which runs the same `ensure_actor_eligible`
 //!    check on the injected authenticated actor against a bound kernel
 //!    `InstanceView` BEFORE `submit` — rejecting an erasure-pending
-//!    action before it reaches the WAL. The bridge DOES inject that
+//!    action before it reaches the WAL. That gate resolves the actor's
+//!    backing user through the `UserBinding` component the production
+//!    [`RegisterActor`](crate::actor::RegisterActor) action writes
+//!    (spawn-then-set); an actor never bound through that path has no
+//!    user scope to gate and soft-passes by design. The bridge DOES
+//!    inject that
 //!    authenticated actor (the kernel-threaded `KernelActionContext::actor`)
 //!    as the forge [`ActionContext::acting_actor`], so a user-scoped
 //!    compute records the authenticated identity rather than a wire
@@ -120,8 +129,8 @@ where
 /// `arkhe-forge-core`.
 ///
 /// `actor` is the kernel-threaded acting identity (the value passed to
-/// `Kernel::submit`, recorded into the WAL record + replayed into
-/// `KernelActionContext::actor`). The bridge injects it as the forge
+/// `Kernel::submit`, recorded into the WAL `Submit` record + replayed
+/// into `KernelActionContext::actor`). The bridge injects it as the forge
 /// [`ActionContext::acting_actor`] so a user-scoped compute reads the
 /// authenticated identity rather than a wire payload field.
 fn kernel_compute_inner<A>(
@@ -298,7 +307,10 @@ mod tests {
     fn user_scoped_compute_without_injected_actor_is_suppressed() {
         // A+ proof: a user-scoped action with NO injected actor (kernel
         // submitted with actor=None) rejects in compute, which the bridge
-        // collapses to an empty Op vec — it never reaches the WAL.
+        // collapses to an empty Op vec — no effect materializes. (What
+        // keeps a rejected action out of the WAL entirely is the L2
+        // admission gate rejecting BEFORE submit; on the kernel path the
+        // Submit/Step envelope is recorded with zero effects.)
         use crate::activity::{
             canonical_verbs, ActivityDraft, ActivityStatus, SubmitActivity, TargetKind, VerbCode,
         };
@@ -331,10 +343,12 @@ mod tests {
     fn determinism_same_input_same_ops() {
         // Bridge is a pure function: same `(action, instance_id, tick)`
         // → byte-identical drained `Vec<Op>`. This is the consumer-side
-        // proof of A1 D1-Total replay determinism through the bridge.
+        // proof of A1 D1-Total replay determinism through the bridge:
+        // CIL replay re-executes compute(), so byte-identical Op output
+        // is exactly what makes the re-derived effects — and hence the
+        // post-state digest + measured chain tip — bit-identical.
         // `arkhe_kernel::state::Op` does not implement `PartialEq`, so
-        // equality is asserted on the postcard-encoded form (which is
-        // what the kernel hashes into the WAL chain anyway).
+        // equality is asserted on the postcard-encoded form.
         let (iid, tick) = fixture_args();
         let action = GdprEraseUser {
             schema_version: 1,

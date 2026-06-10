@@ -236,8 +236,9 @@ fn chain_hash_byte_identical_to_showdown_receipt() {
 // ===========================================================================
 //
 // Drive `RecordHandShowdown` through the L2 service layer
-// (`RuntimeService`), let the kernel run its full authorize →
-// dispatch → WAL append loop, export the resulting `Wal`, stream
+// (`RuntimeService`), let the kernel admit it (Submit record), run its
+// authorize → dispatch loop (Step record with verdict + post-state
+// digest), export the resulting `Wal` (one Submit + Step pair), stream
 // it into a `BufferedWalSink<Vec<u8>>`, then re-read through
 // `StreamingWalReader` and assert each recovered record matches the
 // original byte-for-byte.
@@ -283,16 +284,29 @@ fn runtime_service_dispatch_wal_export_round_trip() {
     );
 
     let wal = service.export_wal().expect("WAL configured");
-    assert_eq!(wal.records.len(), 1, "one dispatch → one WAL record");
-
-    // The WAL record's `action_type_code` must equal RecordHandShowdown's
-    // pinned TYPE_CODE — proving the kernel-side dispatch saw the
-    // forge-side action through the macro-emitted bridge.
-    use arkhe_kernel::abi::TypeCode;
     assert_eq!(
-        wal.records[0].action_type_code,
+        wal.records.len(),
+        2,
+        "one dispatch → one Submit + Step record pair"
+    );
+
+    // The Submit record's `action_type_code` must equal
+    // RecordHandShowdown's pinned TYPE_CODE — proving the kernel-side
+    // dispatch saw the forge-side action through the macro-emitted
+    // bridge. Record 0 is the Submit record (admission precedes the
+    // step).
+    use arkhe_kernel::abi::TypeCode;
+    use arkhe_kernel::persist::WalRecordContent;
+    let WalRecordContent::Submit {
+        action_type_code, ..
+    } = &wal.records[0].content
+    else {
+        panic!("record 0 of a dispatch must be the Submit record");
+    };
+    assert_eq!(
+        *action_type_code,
         TypeCode(0x0100_0001),
-        "WAL record carries RecordHandShowdown TYPE_CODE",
+        "WAL Submit record carries RecordHandShowdown TYPE_CODE",
     );
 
     let mut buffer: Vec<u8> = Vec::new();
@@ -307,20 +321,21 @@ fn runtime_service_dispatch_wal_export_round_trip() {
 
     // Round-trip verify — re-read the sink bytes through the
     // streaming reader and assert byte-identical recovery against the
-    // postcard re-encoding of the original record.
+    // postcard re-encoding of each original record.
     let mut reader = StreamingWalReader::open_v1(&buffer[..]).expect("ARKHEXP1 magic must decode");
-    let recovered = reader
-        .next_record()
-        .expect("frame must decode")
-        .expect("one record present");
-    let original_bytes =
-        postcard::to_allocvec(&wal.records[0]).expect("re-encode original WalRecord");
-    assert_eq!(
-        recovered, original_bytes,
-        "round-trip: recovered record bytes match the original",
-    );
+    for (i, original) in wal.records.iter().enumerate() {
+        let recovered = reader
+            .next_record()
+            .expect("frame must decode")
+            .expect("record present");
+        let original_bytes = postcard::to_allocvec(original).expect("re-encode original WalRecord");
+        assert_eq!(
+            recovered, original_bytes,
+            "round-trip: recovered record {i} bytes match the original",
+        );
+    }
     assert!(
         reader.next_record().expect("post-record poll").is_none(),
-        "exactly one record was framed",
+        "exactly the Submit + Step pair was framed",
     );
 }

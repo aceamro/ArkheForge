@@ -43,7 +43,7 @@
 //! Action-compute coverage (E14.L1 lint trip), and forward-looking
 //! 0-emission Layer (d).
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
 
@@ -132,9 +132,10 @@ fn scan_file(path: &Path, root: &Path, violations: &mut Vec<String>) {
         return;
     }
 
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return;
-    };
+    // Fail loudly on an unreadable file — a silent skip would let a
+    // forbidden reference hide behind a permissions/encoding error.
+    let src = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("zero-emission scan cannot read {rel_str}: {e}"));
 
     for ty in FORBIDDEN_TYPES {
         if let Some(line_no) = src.lines().position(|l| l.contains(ty)) {

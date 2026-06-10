@@ -4,7 +4,7 @@
 > It is the entry point: read it before reading code, and **read §3 before editing anything**.
 
 ArkheForge is the **L1 + L2 runtime** that sits **on top of the ArkheKernel L0 microkernel**
-(a published crates.io dependency, `arkhe-kernel = "0.14"`). It turns the kernel's bare
+(a published crates.io dependency, `arkhe-kernel = "0.15"`). It turns the kernel's bare
 deterministic state machine into an application substrate: five domain primitives, a purity
 gate that keeps every action replay-deterministic, an envelope-encryption / KMS / GDPR
 crypto-erasure stack, WAL streaming export, attestation verification, and read-model
@@ -64,7 +64,7 @@ not change any behavior.
 > **In one line:** L0←L1←L2←L3 one-way; forge sits *on* the kernel and must never re-implement WAL append, authorization, or the `Effect` typestate.
 
 ```text
-L0  ArkheKernel        (separate repo, crates.io: arkhe-kernel 0.14)  ← sealed microkernel
+L0  ArkheKernel        (separate repo, crates.io: arkhe-kernel 0.15)  ← sealed microkernel
         ▲
 L1  arkhe-forge-core + arkhe-forge-macros        primitives, sealed traits, pure compute
         ▲
@@ -103,7 +103,7 @@ grep gate forbid reverse edges. `arkhe-forge-core` (L1) must **not** depend on
 
 ### 3.1 The L0 boundary
 Do **not** edit anything that belongs to the kernel. `arkhe-kernel`/`arkhe-macros` are
-**published dependencies** pinned at `=0.14` in `Cargo.toml`; their source is not in this repo.
+**published dependencies** pinned at `"0.15"` in `Cargo.toml`; their source is not in this repo.
 Never vendor, patch, or shadow them. A breaking need = a new kernel epoch, not a local edit.
 (`arkhe-runtime-proofs` spells this out as a "Layer A non-touch invariant.")
 
@@ -127,7 +127,7 @@ Never vendor, patch, or shadow them. A breaking need = a new kernel epoch, not a
 ### 3.3 Byte-identity / wire-stability surfaces
 | Surface | Where | Why frozen |
 | --- | --- | --- |
-| **DO NOT TOUCH #7** — kernel `WalRecord.seq` is the first postcard field | inherited from L0; bridged in `dispatcher.rs`, `wal_export/round_trip_tests.rs:548-565` | `wal_to_sink` streams record bytes **unmodified**; any reorder breaks bit-exact export |
+| **DO NOT TOUCH #7** — kernel `WalRecord` postcard layout (kind-discriminated `Submit`/`Step` content, frozen per-variant field order; seq read via `WalRecord::seq()`) | inherited from L0; bridged in `dispatcher.rs` (`wal_to_sink`), sentinel `wal_export/round_trip_tests.rs::walrecord_seq_contract_bridge` | `wal_to_sink` streams record bytes **unmodified**; any reorder breaks bit-exact export |
 | WAL export framing | `wal_export/mod.rs` | magic `ARKHEXP1` (`STREAM_HEADER_MAGIC`), `u64` BE length prefix, `MAX_RECORD_BYTES = 1<<24` (16 MiB) |
 | `wal_export` wire-stability tests | `wal_export/wire_stability.rs:59-200` | pin the record-section-bit-exact + golden header pattern |
 | Derive canonical bytes (Layer A item 3) | `arkhe-forge-macros` emission; pinned by byte-identity fixture tests | a derive-emission change (field reorder, postcard config) can break A1 replay |
@@ -249,8 +249,8 @@ examples depend on `-core`/`-platform` directly for teaching clarity only.
 | 1 | `#[derive(ArkheAction)]` emits forge-side **and** kernel-side `ActionCompute` (delegating to `bridge::kernel_compute`) | `arkhe-forge-macros/src/lib.rs:119-198` |
 | 2 | `#[arkhe_pure]` scans the compute body for clock/RNG/I/O/FFI/`unsafe` → `compile_error!` on violation | `arkhe-forge-macros/src/lib.rs:283-309` |
 | 3 | `RuntimeService::register_action::<A>()` registers the action with the kernel | `dispatcher.rs:117-119` |
-| 4 | `RuntimeService::dispatch()` runs the **C3 GDPR `ErasurePending` admission gate** on the authenticated actor, postcard-encodes the action, calls `kernel.submit` (actor threaded through), then `kernel.step` | `dispatcher.rs:182-232` |
-| 5 | the kernel records to its WAL and authorizes/dispatches (L0 internals) | `arkhe-kernel 0.14` |
+| 4 | `RuntimeService::dispatch()` runs the **C3 GDPR `ErasurePending` admission gate** on the authenticated actor, postcard-encodes the action, calls `kernel.submit` (actor threaded through, `caps` as the submission ceiling), then `kernel.step` (`caps` as the session ceiling) | `dispatcher.rs` |
+| 5 | the kernel appends a WAL `Submit` record at admission and a `Step` record (verdict + post-state digest) per pop — one dispatch = a Submit + Step pair; authority = `effective_caps(default_caps, principal, ceiling)` ∩ session ceiling, no `System` bypass | `arkhe-kernel 0.15` |
 | 6 | the kernel-side compute calls `bridge::kernel_compute`, which rebuilds an L1 `ActionContext`, runs the user `compute()`, drains `Vec<Op>` back to the kernel | `arkhe-forge-core/src/bridge.rs:105-149` |
 | 7 | `RuntimeService::export_wal` + `wal_to_sink` frame each **unmodified** `WalRecord` (`ARKHEXP1` magic + `u64` BE length prefix) | `dispatcher.rs:237-265`, `wal_export/mod.rs` |
 | 8 | wire-stability tests assert the record section is bit-exact (DO NOT TOUCH #7) | `wal_export/wire_stability.rs:59-200` |
@@ -306,7 +306,7 @@ first field. Pick a fresh `type_code`; never change a published one.
 CI (`.github/workflows/ci.yml`) enforces:
 
 ```bash
-# test job — workspace tests; the count must match the baseline (default=487 / all-features=545)
+# test job — workspace tests; the count must match the baseline (default=538 / all-features=597)
 cargo test --workspace
 #   (ci/test-baselines.txt; drift fails CI — adding tests is fine, but justify the delta)
 
@@ -332,7 +332,7 @@ cargo build -p arkhe-forge --features tier-2-aws-kms   # + AWS KMS backend (aws-
 cargo build -p arkhe-forge-platform --features tier-2-pqc-receipts  # ML-DSA-65 audit-receipt signing
 ```
 
-The `all-features` test count (545) covers all tiers; `default` is 487.
+The `all-features` test count (597) covers all tiers; `default` is 538.
 
 **Formal proofs (separate, heavier).** The 4-property Kani harness is its own crate (excluded
 from the workspace) on a pinned nightly:

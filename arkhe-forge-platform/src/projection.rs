@@ -21,6 +21,7 @@ use arkhe_forge_core::entry::{EntryBody, EntryCore, EntryId, EntryParentDepth};
 use arkhe_forge_core::event::{ArkheEvent, CrossShellActivity};
 use arkhe_forge_core::space::{ParentChainDepth, SpaceConfig, SpaceId, SpaceMembership};
 use arkhe_kernel::abi::{InstanceId, Tick, TypeCode};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::ManifestSnapshot;
@@ -113,23 +114,38 @@ impl<'i> ProjectionContext<'i> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ProjectionError {
-    /// Event sequence moved backward (corruption or mis-routed dispatch).
-    #[error("projection sequence backward: last {last}, incoming {incoming}")]
+    /// The event stream moved backward (corruption, mis-ordered redelivery,
+    /// or two computes sharing one tick — see
+    /// [`ProjectionRouter::dispatch`]).
+    #[error("projection stream backward: last {last:?}, incoming {incoming:?}")]
     SequenceBackward {
-        /// Last sequence applied by this projection.
-        last: u64,
-        /// Sequence number of the rejected incoming event.
-        incoming: u64,
+        /// Position of the last event the router accepted.
+        last: ProjectionCursor,
+        /// Position of the rejected incoming event.
+        incoming: ProjectionCursor,
     },
 
-    /// A sequence number was skipped — the replay harness needs to fetch the
-    /// missing range before this projection can advance.
-    #[error("projection sequence gap: last {last}, incoming {incoming}")]
+    /// The stream skipped an event — a same-tick sequence jump, or a new
+    /// tick whose batch does not start at sequence 0. The replay harness
+    /// needs to fetch the missing range before dispatch can advance.
+    #[error("projection stream gap: last {last:?}, incoming {incoming:?}")]
     SequenceGap {
-        /// Last sequence applied by this projection.
-        last: u64,
-        /// Sequence number of the event that exposed the gap.
-        incoming: u64,
+        /// Position of the last event the router accepted.
+        last: ProjectionCursor,
+        /// Position of the event that exposed the gap.
+        incoming: ProjectionCursor,
+    },
+
+    /// A DIFFERENT event arrived at a position the router has already
+    /// pinned — the accepted cursor position, or a failed dispatch's
+    /// pending-retry pin. Two same-tick computes collided on the
+    /// `(tick, sequence)` identity (driver contract violation),
+    /// distinguished from a true redelivery/retry by event identity
+    /// (type code + payload).
+    #[error("projection stream position conflict at {at:?}")]
+    PositionConflict {
+        /// The contested stream position.
+        at: ProjectionCursor,
     },
 
     /// Caller attempted a mutation in a non-`Active` state (observer is
@@ -160,8 +176,11 @@ pub enum ProjectionError {
 /// kept in sync with the L1 event stream for a specific set of `TypeCode`s.
 ///
 /// Implementors must be `Send + Sync` so the `ProjectionRouter` can run
-/// across worker threads; dedup / gap detection is centralised in the
-/// router using [`Projection::last_applied`].
+/// across worker threads. Stream dedup / gap detection is centralised in
+/// the router's own cursor; the router additionally consults
+/// [`Projection::last_applied`] to skip events a projection has already
+/// applied (catch-up after a router rebuild or a partially failed
+/// fan-out).
 pub trait Projection: Send + Sync {
     /// TypeCodes this projection observes — the router filters incoming
     /// events against this slice.
@@ -185,17 +204,23 @@ pub trait Projection: Send + Sync {
     }
 
     /// Last `(sequence, tick)` applied — `None` if the projection is fresh.
+    /// The router skips any event at or before this position (tick-major
+    /// order), so the `on_event` bump is what makes application
+    /// at-most-once across redeliveries.
     fn last_applied(&self) -> Option<(u64, Tick)>;
 }
 
 // ===================== Projection view structs =====================
 
-/// `(u64, Tick)` pair tracking the last event applied.
+/// Composite event-stream position. `EventRecord.sequence` is
+/// per-compute — it restarts at 0 for every action's `ActionContext` — so
+/// an event is identified in the stream by the `(tick, sequence)` pair,
+/// ordered tick-major.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectionCursor {
-    /// Last sequence number applied.
+    /// Sequence number within the emitting compute's batch.
     pub sequence: u64,
-    /// Tick at which the last event was applied.
+    /// Tick at which the event was emitted.
     pub tick: Tick,
 }
 
@@ -344,8 +369,9 @@ impl ProjectionStore for InMemoryProjectionStore {
 // ===================== Router =====================
 
 /// Event-stream dispatcher. Matches incoming events to registered
-/// projections by `TypeCode`, enforces dedup + gap detection via
-/// `Projection::last_applied`, and propagates observer state transitions.
+/// projections by `TypeCode`, enforces stream-order dedup + gap detection
+/// via a router-held `(tick, sequence)` cursor, and propagates observer
+/// state transitions.
 pub struct ProjectionRouter {
     projections: Vec<Box<dyn Projection>>,
     /// `TypeCode -> projection indices that observe it`, built at
@@ -353,6 +379,23 @@ pub struct ProjectionRouter {
     /// dispatch visits matching projections in the same order a linear scan
     /// would — dispatch-order semantics are preserved (see `dispatch`).
     observers_by_code: HashMap<TypeCode, Vec<usize>>,
+    /// Position of the last event accepted by `dispatch`, including events
+    /// no projection observes — gap detection needs the full stream, not
+    /// the per-projection filtered view. Advanced only after a fully
+    /// successful fan-out so a failed dispatch stays retryable.
+    cursor: Option<ProjectionCursor>,
+    /// Identity (type code + payload) of the last accepted event — lets
+    /// the cursor-equality path distinguish a true redelivery (`Ok(0)`)
+    /// from a DIFFERENT event colliding on the same position
+    /// ([`ProjectionError::PositionConflict`]).
+    last_event: Option<(u32, Bytes)>,
+    /// Position + identity (type code, payload) of the event a failed
+    /// fan-out left unapplied — set on every dispatch error, first or
+    /// mid-stream. Only a retry of this exact EVENT may proceed: a
+    /// skip-ahead would silently advance past the lost event, and a
+    /// DIFFERENT event at the same position would conflate same-tick
+    /// compute streams.
+    pending_retry: Option<(ProjectionCursor, u32, Bytes)>,
     state: ObserverState,
 }
 
@@ -365,6 +408,9 @@ impl ProjectionRouter {
         Self {
             projections: Vec::new(),
             observers_by_code: HashMap::new(),
+            cursor: None,
+            last_event: None,
+            pending_retry: None,
             state: ObserverState::Passive,
         }
     }
@@ -388,9 +434,6 @@ impl ProjectionRouter {
 
     /// Transition to `Active` — fails if currently `Draining`.
     pub fn promote_to_active(&mut self) -> Result<(), ProjectionError> {
-        if self.state == ObserverState::Draining {
-            return Err(ProjectionError::NotActive { state: self.state });
-        }
         self.transition(ObserverState::Active)
     }
 
@@ -451,6 +494,13 @@ impl ProjectionRouter {
     }
 
     fn transition(&mut self, next: ObserverState) -> Result<(), ProjectionError> {
+        // Draining is terminal: once a graceful shutdown begins, no
+        // transition path (including Draining → Passive → Active) may
+        // resurrect the router. Gating here covers every public
+        // transition method with a single guard.
+        if self.state == ObserverState::Draining {
+            return Err(ProjectionError::NotActive { state: self.state });
+        }
         for p in &mut self.projections {
             p.on_state_change(next)?;
         }
@@ -465,7 +515,45 @@ impl ProjectionRouter {
     /// index stores their indices in that order), so a projection registered
     /// earlier always sees an event before one registered later — callers may
     /// rely on that ordering. A `TypeCode` with no registered observer is a
-    /// cheap miss (no index entry) returning `Ok(0)`.
+    /// cheap miss (no index entry) returning `Ok(0)` — the event still
+    /// advances the stream cursor.
+    ///
+    /// ## Stream-order contract
+    ///
+    /// `EventRecord.sequence` is per-compute: every compute's batch starts
+    /// at 0 and is contiguous, so an event's stream identity is the
+    /// composite `(tick, sequence)` pair, ordered tick-major. Callers must
+    /// feed every drained event of a compute in emission order and must
+    /// advance the tick between computes. The kernel scheduler permits
+    /// same-tick scheduled actions, but two same-tick computes emit
+    /// colliding positions — this router rejects the collision loudly
+    /// rather than conflating the streams: a colliding head behind the
+    /// cursor is [`ProjectionError::SequenceBackward`], and a DIFFERENT
+    /// event at exactly the cursor position (the single-event-batch
+    /// shape) is [`ProjectionError::PositionConflict`], distinguished
+    /// from a true redelivery by event identity (type code + payload).
+    ///
+    /// Checks against the stream cursor (last accepted event):
+    ///
+    /// * the same `(tick, sequence)` redelivered with the same identity —
+    ///   duplicate, `Ok(0)`;
+    /// * a different event at the cursor position —
+    ///   [`ProjectionError::PositionConflict`];
+    /// * a position behind the cursor —
+    ///   [`ProjectionError::SequenceBackward`];
+    /// * a same-tick sequence jump, or a new tick whose batch does not
+    ///   start at sequence 0 — [`ProjectionError::SequenceGap`];
+    /// * a fresh router (no cursor yet) accepts any position as its
+    ///   resume anchor.
+    ///
+    /// The cursor advances only after a fully successful fan-out. A
+    /// FAILED fan-out (first or mid-stream) pins the unapplied event's
+    /// position AND identity: only a retry of that exact event may
+    /// proceed — a skip-ahead is a gap (it would silently advance past
+    /// the lost event), a different event at the pinned position is a
+    /// [`ProjectionError::PositionConflict`] — and the projections that
+    /// already applied it before the failure are skipped on the retry
+    /// via [`Projection::last_applied`].
     ///
     /// Only the `Active` state may dispatch — `Passive` and `Draining`
     /// reject with [`ProjectionError::NotActive`]. The `Passive` rejection
@@ -481,6 +569,62 @@ impl ProjectionRouter {
         if self.state != ObserverState::Active {
             return Err(ProjectionError::NotActive { state: self.state });
         }
+        let incoming = ProjectionCursor {
+            sequence: event.sequence,
+            tick: event.tick,
+        };
+        if let Some(last) = self.cursor {
+            if incoming == last {
+                // Same position: a true redelivery is a no-op, but a
+                // DIFFERENT event here means two same-tick computes
+                // collided on the cursor — never conflate silently.
+                let is_redelivery = self.last_event.as_ref().is_some_and(|(tc, payload)| {
+                    *tc == event.type_code && *payload == event.payload
+                });
+                if is_redelivery {
+                    return Ok(0);
+                }
+                return Err(ProjectionError::PositionConflict { at: incoming });
+            }
+        }
+        if let Some((pending, pending_tc, pending_payload)) = &self.pending_retry {
+            // A prior dispatch failed at `pending` (first or mid-stream)
+            // and was never applied — accept only the retry of that exact
+            // EVENT: a skip-ahead would lose it silently, and a different
+            // event at the same position would conflate same-tick compute
+            // streams. The pending position already passed the ordering
+            // checks against the cursor when it first arrived.
+            let pending = *pending;
+            if (incoming.tick, incoming.sequence) < (pending.tick, pending.sequence) {
+                return Err(ProjectionError::SequenceBackward {
+                    last: pending,
+                    incoming,
+                });
+            }
+            if incoming != pending {
+                return Err(ProjectionError::SequenceGap {
+                    last: pending,
+                    incoming,
+                });
+            }
+            if *pending_tc != event.type_code || *pending_payload != event.payload {
+                return Err(ProjectionError::PositionConflict { at: incoming });
+            }
+        } else if let Some(last) = self.cursor {
+            if (incoming.tick, incoming.sequence) < (last.tick, last.sequence) {
+                return Err(ProjectionError::SequenceBackward { last, incoming });
+            }
+            let contiguous = if incoming.tick == last.tick {
+                incoming.sequence == last.sequence.saturating_add(1)
+            } else {
+                // A new tick means a new compute whose sequence restarts
+                // at 0 — anything else is a missing batch head.
+                incoming.sequence == 0
+            };
+            if !contiguous {
+                return Err(ProjectionError::SequenceGap { last, incoming });
+            }
+        }
         let tc = TypeCode(event.type_code);
         // Split-borrow the disjoint fields: the index slice (immutable) and
         // the projection vec (mutable) are borrowed independently so the loop
@@ -488,35 +632,33 @@ impl ProjectionRouter {
         let Self {
             projections,
             observers_by_code,
+            cursor,
+            last_event,
+            pending_retry,
             ..
         } = self;
-        let Some(matching) = observers_by_code.get(&tc) else {
-            return Ok(0);
-        };
         // Indices are already in registration order.
         let mut applied = 0usize;
-        for &i in matching {
-            let p = &mut projections[i];
-            if let Some((last_seq, _)) = p.last_applied() {
-                if event.sequence == last_seq {
-                    continue; // duplicate — silent no-op
+        if let Some(matching) = observers_by_code.get(&tc) {
+            for &i in matching {
+                let p = &mut projections[i];
+                if let Some((last_seq, last_tick)) = p.last_applied() {
+                    // Already applied — catch-up redelivery into a rebuilt
+                    // router or a retry after a partial fan-out failure.
+                    if (incoming.tick, incoming.sequence) <= (last_tick, last_seq) {
+                        continue;
+                    }
                 }
-                if event.sequence < last_seq {
-                    return Err(ProjectionError::SequenceBackward {
-                        last: last_seq,
-                        incoming: event.sequence,
-                    });
+                if let Err(e) = p.on_event(event, ctx) {
+                    *pending_retry = Some((incoming, event.type_code, event.payload.clone()));
+                    return Err(e);
                 }
-                if event.sequence > last_seq.saturating_add(1) {
-                    return Err(ProjectionError::SequenceGap {
-                        last: last_seq,
-                        incoming: event.sequence,
-                    });
-                }
+                applied += 1;
             }
-            p.on_event(event, ctx)?;
-            applied += 1;
         }
+        *cursor = Some(incoming);
+        *last_event = Some((event.type_code, event.payload.clone()));
+        *pending_retry = None;
         Ok(applied)
     }
 }
@@ -601,6 +743,9 @@ impl Projection for CrossShellActivityFanout {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use super::*;
     use arkhe_forge_core::actor::ActorKind;
     use arkhe_forge_core::component::BoundedString;
@@ -609,6 +754,91 @@ mod tests {
 
     fn sid(byte: u8) -> ShellId {
         ShellId([byte; 16])
+    }
+
+    /// Counts `on_event` applications — observability for fan-out and
+    /// at-most-once assertions once the projection is boxed into a router.
+    struct CountingProjection {
+        observes: [TypeCode; 1],
+        cursor: Option<ProjectionCursor>,
+        applied: Arc<AtomicUsize>,
+    }
+
+    impl CountingProjection {
+        fn new(applied: Arc<AtomicUsize>) -> Self {
+            Self {
+                observes: [TypeCode(CrossShellActivity::TYPE_CODE)],
+                cursor: None,
+                applied,
+            }
+        }
+    }
+
+    impl Projection for CountingProjection {
+        fn observes(&self) -> &[TypeCode] {
+            &self.observes
+        }
+
+        fn on_event(
+            &mut self,
+            event: &EventRecord,
+            _ctx: &ProjectionContext<'_>,
+        ) -> Result<(), ProjectionError> {
+            self.applied.fetch_add(1, Ordering::SeqCst);
+            self.cursor = Some(ProjectionCursor {
+                sequence: event.sequence,
+                tick: event.tick,
+            });
+            Ok(())
+        }
+
+        fn last_applied(&self) -> Option<(u64, Tick)> {
+            self.cursor.map(|c| (c.sequence, c.tick))
+        }
+    }
+
+    /// Fails its first `on_event`, succeeds afterwards — drives the
+    /// partial-fan-out retry path.
+    struct FailOnceProjection {
+        observes: [TypeCode; 1],
+        cursor: Option<ProjectionCursor>,
+        failed: bool,
+    }
+
+    impl FailOnceProjection {
+        fn new() -> Self {
+            Self {
+                observes: [TypeCode(CrossShellActivity::TYPE_CODE)],
+                cursor: None,
+                failed: false,
+            }
+        }
+    }
+
+    impl Projection for FailOnceProjection {
+        fn observes(&self) -> &[TypeCode] {
+            &self.observes
+        }
+
+        fn on_event(
+            &mut self,
+            event: &EventRecord,
+            _ctx: &ProjectionContext<'_>,
+        ) -> Result<(), ProjectionError> {
+            if !self.failed {
+                self.failed = true;
+                return Err(ProjectionError::Storage("injected first-apply failure"));
+            }
+            self.cursor = Some(ProjectionCursor {
+                sequence: event.sequence,
+                tick: event.tick,
+            });
+            Ok(())
+        }
+
+        fn last_applied(&self) -> Option<(u64, Tick)> {
+            self.cursor.map(|c| (c.sequence, c.tick))
+        }
     }
 
     fn ent(v: u64) -> EntityId {
@@ -712,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatcher_dedups_duplicate_sequence() {
+    fn dispatcher_dedups_redelivered_event() {
         let mut r = ProjectionRouter::new();
         r.promote_to_active().unwrap();
         r.register(Box::new(CrossShellActivityFanout::new()));
@@ -720,20 +950,36 @@ mod tests {
         let ev = make_cross_shell_event(0, 5, target);
         r.dispatch(&ev, &ctx(5)).unwrap();
         let applied_again = r.dispatch(&ev, &ctx(5)).unwrap();
-        assert_eq!(applied_again, 0, "duplicate sequence must no-op");
+        assert_eq!(applied_again, 0, "redelivered (tick, sequence) must no-op");
     }
 
     #[test]
-    fn dispatcher_rejects_gap() {
+    fn dispatcher_rejects_same_tick_gap() {
         let mut r = ProjectionRouter::new();
         r.promote_to_active().unwrap();
         r.register(Box::new(CrossShellActivityFanout::new()));
         let target = sid(0x10);
         r.dispatch(&make_cross_shell_event(0, 5, target), &ctx(5))
             .unwrap();
-        // Jump to sequence 5 — gap (1..=4 missing).
+        // Jump to sequence 2 within tick 5 — sequence 1 missing.
         let err = r
-            .dispatch(&make_cross_shell_event(5, 6, target), &ctx(6))
+            .dispatch(&make_cross_shell_event(2, 5, target), &ctx(5))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceGap { .. }));
+    }
+
+    #[test]
+    fn dispatcher_rejects_new_tick_missing_batch_head() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let target = sid(0x10);
+        r.dispatch(&make_cross_shell_event(0, 5, target), &ctx(5))
+            .unwrap();
+        // Tick 6 batch must start at sequence 0 — sequence 3 means the
+        // head of the new compute's batch is missing.
+        let err = r
+            .dispatch(&make_cross_shell_event(3, 6, target), &ctx(6))
             .unwrap_err();
         assert!(matches!(err, ProjectionError::SequenceGap { .. }));
     }
@@ -750,6 +996,288 @@ mod tests {
             .dispatch(&make_cross_shell_event(1, 5, target), &ctx(5))
             .unwrap_err();
         assert!(matches!(err, ProjectionError::SequenceBackward { .. }));
+    }
+
+    #[test]
+    fn dispatcher_rejects_backward_tick() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let target = sid(0x10);
+        r.dispatch(&make_cross_shell_event(0, 5, target), &ctx(5))
+            .unwrap();
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 4, target), &ctx(4))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceBackward { .. }));
+    }
+
+    /// Drivers must advance the tick between computes. If two computes
+    /// share a tick, the second batch head `(tick, 0)` lands behind the
+    /// cursor and must be rejected loudly — never silently dropped as a
+    /// duplicate.
+    #[test]
+    fn same_tick_second_compute_head_rejected_loudly() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let target = sid(0x10);
+        r.dispatch(&make_cross_shell_event(0, 5, target), &ctx(5))
+            .unwrap();
+        r.dispatch(&make_cross_shell_event(1, 5, target), &ctx(5))
+            .unwrap();
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 5, target), &ctx(5))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceBackward { .. }));
+    }
+
+    /// Same-tick compute collision with SINGLE-event batches: the second
+    /// compute's head lands exactly on the cursor, so the equality path
+    /// must compare event identity — a DIFFERENT event there is a
+    /// `PositionConflict`, never a silent `Ok(0)` "redelivery".
+    #[test]
+    fn same_tick_single_event_batches_conflict_loudly() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        r.dispatch(&make_cross_shell_event(0, 5, sid(0x10)), &ctx(5))
+            .unwrap();
+        // Distinct payload (different target shell) at the same (5, 0).
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 5, sid(0x20)), &ctx(5))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectionError::PositionConflict {
+                at: ProjectionCursor {
+                    sequence: 0,
+                    tick: Tick(5)
+                }
+            }
+        ));
+    }
+
+    /// A failed FIRST dispatch must not let a later position anchor the
+    /// cursor silently past the lost event: only the exact retry may
+    /// proceed.
+    #[test]
+    fn failed_first_dispatch_pins_the_anchor_until_retried() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(FailOnceProjection::new()));
+        let ev = make_cross_shell_event(0, 5, sid(0x10));
+        assert!(r.dispatch(&ev, &ctx(5)).is_err());
+        // Skipping ahead past the failed event is a loud gap...
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 6, sid(0x10)), &ctx(6))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceGap { .. }));
+        // ...while retrying the exact position succeeds and re-anchors.
+        assert_eq!(r.dispatch(&ev, &ctx(5)).unwrap(), 1);
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 6, sid(0x10)), &ctx(6))
+                .unwrap(),
+            1
+        );
+    }
+
+    /// The failed-position pin holds the event IDENTITY too: a
+    /// DIFFERENT event arriving at the never-accepted position is a
+    /// `PositionConflict`, never silently absorbed as the "retry" —
+    /// otherwise two same-tick computes would conflate through the
+    /// failure window.
+    #[test]
+    fn failed_first_dispatch_rejects_a_different_event_at_the_pinned_position() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(FailOnceProjection::new()));
+        let ev = make_cross_shell_event(0, 5, sid(0x10));
+        assert!(r.dispatch(&ev, &ctx(5)).is_err());
+        // Distinct payload (different target shell) at the pinned (5, 0).
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 5, sid(0x20)), &ctx(5))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProjectionError::PositionConflict {
+                at: ProjectionCursor {
+                    sequence: 0,
+                    tick: Tick(5)
+                }
+            }
+        ));
+        // The genuine retry still proceeds.
+        assert_eq!(r.dispatch(&ev, &ctx(5)).unwrap(), 1);
+    }
+
+    /// The retry pin covers MID-STREAM failures, not only the first
+    /// dispatch: after a successful anchor, a failed event must not be
+    /// lost to a skip-ahead (the new-tick batch-head rule would
+    /// otherwise accept it) nor replaced by a different same-position
+    /// event.
+    #[test]
+    fn failed_mid_stream_dispatch_pins_the_retry() {
+        struct FailSecondProjection {
+            observes: [TypeCode; 1],
+            cursor: Option<ProjectionCursor>,
+            calls: usize,
+        }
+        impl Projection for FailSecondProjection {
+            fn observes(&self) -> &[TypeCode] {
+                &self.observes
+            }
+            fn on_event(
+                &mut self,
+                event: &EventRecord,
+                _ctx: &ProjectionContext<'_>,
+            ) -> Result<(), ProjectionError> {
+                self.calls += 1;
+                if self.calls == 2 {
+                    return Err(ProjectionError::Storage("transient"));
+                }
+                self.cursor = Some(ProjectionCursor {
+                    sequence: event.sequence,
+                    tick: event.tick,
+                });
+                Ok(())
+            }
+            fn last_applied(&self) -> Option<(u64, Tick)> {
+                self.cursor.map(|c| (c.sequence, c.tick))
+            }
+        }
+
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(FailSecondProjection {
+            observes: [TypeCode(CrossShellActivity::TYPE_CODE)],
+            cursor: None,
+            calls: 0,
+        }));
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 5, sid(0x10)), &ctx(5))
+                .unwrap(),
+            1
+        );
+        let failed = make_cross_shell_event(0, 6, sid(0x10));
+        assert!(r.dispatch(&failed, &ctx(6)).is_err());
+        // Skip-ahead past the failed event is a loud gap (the new-tick
+        // batch-head rule must not absorb it)...
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 7, sid(0x10)), &ctx(7))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceGap { .. }));
+        // ...a different event at the pinned position is a conflict...
+        let err = r
+            .dispatch(&make_cross_shell_event(0, 6, sid(0x20)), &ctx(6))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::PositionConflict { .. }));
+        // ...and the genuine retry proceeds, after which the stream
+        // continues normally.
+        assert_eq!(r.dispatch(&failed, &ctx(6)).unwrap(), 1);
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 7, sid(0x10)), &ctx(7))
+                .unwrap(),
+            1
+        );
+    }
+
+    /// Two successive actions each get a fresh compute whose event sequence
+    /// restarts at 0. The second `(tick+1, 0)` event is a distinct stream
+    /// position — it must apply, not vanish as a "duplicate" of the first.
+    #[test]
+    fn successive_computes_restarting_sequence_zero_both_apply() {
+        let applied = Arc::new(AtomicUsize::new(0));
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CountingProjection::new(applied.clone())));
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 100, sid(0x01)), &ctx(100))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 101, sid(0x02)), &ctx(101))
+                .unwrap(),
+            1,
+            "second compute's sequence-0 event must not be conflated"
+        );
+        assert_eq!(applied.load(Ordering::SeqCst), 2);
+    }
+
+    /// Gap detection is stream-level: an event nobody observes still
+    /// advances the cursor, so a subsequent same-tick jump is a gap and
+    /// the contiguous successor applies.
+    #[test]
+    fn unobserved_events_advance_stream_cursor() {
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CrossShellActivityFanout::new()));
+        let unobserved = EventRecord {
+            type_code: 0x0003_0F02, // UserErasureScheduled — not observed
+            sequence: 0,
+            tick: Tick(5),
+            payload: Bytes::new(),
+        };
+        assert_eq!(r.dispatch(&unobserved, &ctx(5)).unwrap(), 0);
+        let err = r
+            .dispatch(&make_cross_shell_event(2, 5, sid(0x10)), &ctx(5))
+            .unwrap_err();
+        assert!(matches!(err, ProjectionError::SequenceGap { .. }));
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(1, 5, sid(0x10)), &ctx(5))
+                .unwrap(),
+            1
+        );
+    }
+
+    /// A projection carrying state from a previous run skips events at or
+    /// before its `last_applied` when a rebuilt router replays the stream.
+    #[test]
+    fn rebuilt_router_skips_already_applied_events() {
+        let applied = Arc::new(AtomicUsize::new(0));
+        let mut p = CountingProjection::new(applied.clone());
+        p.on_event(&make_cross_shell_event(0, 10, sid(0x01)), &ctx(10))
+            .unwrap();
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
+
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(p));
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 10, sid(0x01)), &ctx(10))
+                .unwrap(),
+            0,
+            "catch-up redelivery must not double-apply"
+        );
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            r.dispatch(&make_cross_shell_event(0, 11, sid(0x01)), &ctx(11))
+                .unwrap(),
+            1
+        );
+        assert_eq!(applied.load(Ordering::SeqCst), 2);
+    }
+
+    /// A projection failure mid-fan-out leaves the cursor unadvanced: the
+    /// same event redispatches, projections that already applied it are
+    /// skipped, and the failed projection gets its retry.
+    #[test]
+    fn failed_fanout_retry_does_not_double_apply() {
+        let applied = Arc::new(AtomicUsize::new(0));
+        let mut r = ProjectionRouter::new();
+        r.promote_to_active().unwrap();
+        r.register(Box::new(CountingProjection::new(applied.clone())));
+        r.register(Box::new(FailOnceProjection::new()));
+        let ev = make_cross_shell_event(0, 5, sid(0x10));
+        assert!(r.dispatch(&ev, &ctx(5)).is_err());
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            r.dispatch(&ev, &ctx(5)).unwrap(),
+            1,
+            "retry applies only the previously failed projection"
+        );
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
     }
 
     #[test]

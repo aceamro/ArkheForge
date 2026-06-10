@@ -6,8 +6,18 @@
 //! macro + `arkhe-subset-rust-check` policy) ships but no compute method ever
 //! invokes it, the lint is silently neutered. This test scans every
 //! Runtime-crate source file with `syn`, locates every `impl ActionCompute for
-//! T` block, and asserts the compute method has `#[arkhe_pure]`. Failure prints
+//! T` block at **any nesting depth** (including impls declared inside fn
+//! bodies), and asserts the compute method has `#[arkhe_pure]`. Failure prints
 //! the offending file + type so an operator can patch the missing attribute.
+//!
+//! # `#[cfg(test)]` exemption
+//!
+//! Items lexically under a `#[cfg(test)]` module are exempt: they never
+//! compile into production builds, and test fixtures legitimately impl the
+//! kernel `ActionCompute` trait directly without the purity lint. Only the
+//! exact `#[cfg(test)]` form is recognized — `#[cfg(not(test))]`,
+//! `#[cfg(feature = "…")]`, and compound predicates stay in scope, so the
+//! exemption cannot be widened by accident.
 //!
 //! Why here (vs a separate sibling crate): `arkhe-trait-default-check` already
 //! ships as the workspace's MC structural-invariant syn scaffolding; the
@@ -20,10 +30,11 @@
 //! can impl the trait — there is no escape via hand-rolled trait impl
 //! reachable from outside the workspace.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
-use syn::{ImplItem, Item, ItemImpl};
+use syn::visit::{self, Visit};
+use syn::{Attribute, ImplItem, ItemImpl, ItemMod, Meta};
 
 /// The set of workspace crates that may contain `impl ActionCompute for T`
 /// blocks. `examples/dice` is excluded — its `RollAction::compute` uses a
@@ -79,27 +90,57 @@ fn scan_dir(dir: &Path, missing: &mut Vec<String>, scanned: &mut usize) {
 }
 
 fn scan_file(path: &Path, missing: &mut Vec<String>) {
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(file) = syn::parse_file(&src) else {
-        return;
-    };
-    visit_items(&file.items, path, missing);
+    // A file the scanner cannot read or parse is a coverage hole, not a
+    // skippable entry — fail loudly instead of silently narrowing the scan.
+    let src = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("scanner failed to read {}: {e}", path.display()));
+    let file = syn::parse_file(&src)
+        .unwrap_or_else(|e| panic!("scanner failed to parse {}: {e}", path.display()));
+    scan_syntax_tree(&file, path, missing);
 }
 
-fn visit_items(items: &[Item], path: &Path, missing: &mut Vec<String>) {
-    for item in items {
-        match item {
-            Item::Impl(item_impl) => check_impl(item_impl, path, missing),
-            Item::Mod(item_mod) => {
-                if let Some((_, mod_items)) = &item_mod.content {
-                    visit_items(mod_items, path, missing);
-                }
-            }
-            _ => {}
+fn scan_syntax_tree(file: &syn::File, path: &Path, missing: &mut Vec<String>) {
+    let mut visitor = ComputeCoverageVisitor { path, missing };
+    visitor.visit_file(file);
+}
+
+/// AST visitor that reaches `impl ActionCompute` blocks at any nesting depth
+/// (module bodies, fn bodies, blocks) and skips `#[cfg(test)]` module
+/// subtrees entirely.
+struct ComputeCoverageVisitor<'a> {
+    path: &'a Path,
+    missing: &'a mut Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for ComputeCoverageVisitor<'_> {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        if is_cfg_test(&node.attrs) {
+            return;
         }
+        visit::visit_item_mod(self, node);
     }
+
+    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
+        check_impl(node, self.path, self.missing);
+        visit::visit_item_impl(self, node);
+    }
+}
+
+/// Recognizes the exact `#[cfg(test)]` attribute form. Compound or negated
+/// predicates (`not(test)`, `any(test, …)`, `feature = "test"`) do not parse
+/// as a bare path and are intentionally not exempt.
+fn is_cfg_test(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("cfg") {
+            return false;
+        }
+        match &attr.meta {
+            Meta::List(list) => list
+                .parse_args::<syn::Path>()
+                .is_ok_and(|p| p.is_ident("test")),
+            _ => false,
+        }
+    })
 }
 
 fn check_impl(item: &ItemImpl, path: &Path, missing: &mut Vec<String>) {
@@ -143,4 +184,100 @@ fn type_to_string(ty: &syn::Type) -> String {
     } else {
         "<complex>".into()
     }
+}
+
+fn scan_str(src: &str) -> Vec<String> {
+    let file = syn::parse_str::<syn::File>(src).expect("fixture source parses");
+    let mut missing = Vec::new();
+    scan_syntax_tree(&file, Path::new("inline-fixture.rs"), &mut missing);
+    missing
+}
+
+#[test]
+fn detects_unannotated_impl_nested_in_fn_body() {
+    let missing = scan_str(
+        r#"
+        mod production {
+            fn build() {
+                struct Hidden;
+                impl ActionCompute for Hidden {
+                    fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
+                        Vec::new()
+                    }
+                }
+            }
+        }
+        "#,
+    );
+    assert_eq!(missing.len(), 1, "fn-body-nested impl must be detected");
+    assert!(missing[0].contains("Hidden"), "got: {missing:?}");
+}
+
+#[test]
+fn accepts_annotated_impl_nested_in_fn_body() {
+    let missing = scan_str(
+        r#"
+        fn build() {
+            struct Covered;
+            impl ActionCompute for Covered {
+                #[arkhe_pure]
+                fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
+                    Vec::new()
+                }
+            }
+        }
+        "#,
+    );
+    assert!(missing.is_empty(), "got: {missing:?}");
+}
+
+#[test]
+fn exempts_impl_under_cfg_test_module() {
+    let missing = scan_str(
+        r#"
+        #[cfg(test)]
+        mod tests {
+            fn fixture() {
+                struct Fixture;
+                impl ActionCompute for Fixture {
+                    fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
+                        Vec::new()
+                    }
+                }
+            }
+        }
+        "#,
+    );
+    assert!(
+        missing.is_empty(),
+        "cfg(test) subtree must be exempt: {missing:?}"
+    );
+}
+
+#[test]
+fn cfg_exemption_requires_exact_test_predicate() {
+    let missing = scan_str(
+        r#"
+        #[cfg(not(test))]
+        mod negated {
+            struct A;
+            impl ActionCompute for A {
+                fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> { Vec::new() }
+            }
+        }
+
+        #[cfg(feature = "test")]
+        mod featured {
+            struct B;
+            impl ActionCompute for B {
+                fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> { Vec::new() }
+            }
+        }
+        "#,
+    );
+    assert_eq!(
+        missing.len(),
+        2,
+        "non-exact cfg predicates must stay in scope: {missing:?}"
+    );
 }

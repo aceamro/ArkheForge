@@ -50,7 +50,7 @@ Out of scope: the ArkheKernel L0 sibling repository (own
 
 ## Versioning
 
-ArkheForge's version tracks the ArkheKernel epoch (currently v0.14).
+ArkheForge's version tracks the ArkheKernel epoch (currently v0.15).
 Security fixes land on the published version. Version 1.0 is
 intentionally never reached (parity with ArkheKernel).
 

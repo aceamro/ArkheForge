@@ -299,7 +299,7 @@ fn verify_mode() -> Result<(), Box<dyn std::error::Error>> {
     let on_disk = std::fs::read(&path)?;
     if buffer == on_disk {
         println!(
-            "dice.wal verify OK — {} record(s), {} byte(s).",
+            "dice.wal verify OK — {} roll(s), {} byte(s).",
             history.len(),
             on_disk.len()
         );
@@ -472,9 +472,9 @@ fn print_history(rows: &[DisplayRow], cap: usize) {
 }
 
 /// Print the per-stage timing breakdown + an aggregate
-/// "rolls per second" estimate, plus the WAL footprint (record count
-/// + on-disk bytes).
-fn print_performance(timings: &StageTimings, total_records: usize, wal_bytes: u64) {
+/// "rolls per second" estimate, plus the WAL footprint (roll count
+/// + on-disk bytes; each roll appends a Submit + Step record pair).
+fn print_performance(timings: &StageTimings, total_rolls: usize, wal_bytes: u64) {
     let total = timings.total_compute();
     let total_micros = total.as_micros();
     println!();
@@ -516,8 +516,8 @@ fn print_performance(timings: &StageTimings, total_records: usize, wal_bytes: u6
     }
     println!();
     println!(
-        "WAL: {} record(s), {} bytes (dice.wal)",
-        total_records, wal_bytes
+        "WAL: {} roll(s), {} bytes (dice.wal)",
+        total_rolls, wal_bytes
     );
 }
 

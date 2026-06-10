@@ -32,10 +32,13 @@
 //!
 //! Byte-to-integer conversions use explicit little-endian
 //! (`u32::from_le_bytes` / `u64::from_le_bytes`) regardless of host
-//! endianness, so x86_64 / aarch64 / wasm32 produce byte-identical
-//! streams from the same seed. CI enforces this via the golden-vector
-//! cross-compile comparison plus a repository self-grep that forbids
-//! native-endian conversion helpers in the source tree.
+//! endianness, and `usize` sampling routes through the u64 Lemire path
+//! on every pointer width, so the same seed yields identical values
+//! and identical stream consumption across targets. Enforcement: the
+//! golden-vector byte-compare in `tests/golden_vector.rs`, a CI
+//! self-grep that rejects native-endian conversion helpers under
+//! `arkhe-rand/src/`, and a host identity test asserting `usize`
+//! draws equal `u64` draws bit-for-bit.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -57,6 +60,11 @@ pub use shuffle::shuffle;
 /// byte-identically.
 const KDF_CONTEXT: &str = "arkhe-rand stream";
 
+/// BLAKE3 XOF output block length. `fill_bytes` prefetches one full
+/// output block at a time so small draws (4/8 bytes per Lemire sample)
+/// do not recompute a 64-byte block per call.
+const XOF_BLOCK_LEN: usize = 64;
+
 /// BLAKE3-keyed PRNG.
 ///
 /// `RngSource` consumes 32 bytes of seed material (deterministic mode
@@ -66,11 +74,11 @@ const KDF_CONTEXT: &str = "arkhe-rand stream";
 ///
 /// # Drop semantics
 ///
-/// On drop, `seed` is zeroized via `Zeroizing<[u8; 32]>`. The internal
-/// XOF state is replaced with a sentinel zero-keyed reader; the
-/// discarded reader drops normally — allocator-dependent behavior, not
-/// internal-state wipe (blake3 does not expose that surface).
-/// Best-effort defense-in-depth.
+/// On drop, `seed` and the buffered (not-yet-emitted) stream block are
+/// zeroized via `Zeroizing`. The internal XOF state is replaced with a
+/// sentinel zero-keyed reader; the discarded reader drops normally —
+/// allocator-dependent behavior, not internal-state wipe (blake3 does
+/// not expose that surface). Best-effort defense-in-depth.
 ///
 /// # Debug redaction
 ///
@@ -88,6 +96,13 @@ pub struct RngSource {
     #[allow(dead_code)]
     seed: Zeroizing<[u8; 32]>,
     xof: blake3::OutputReader,
+    // One-block prefetch cache over the XOF stream: `block[pos..]`
+    // holds bytes already computed but not yet emitted
+    // (`pos == XOF_BLOCK_LEN` means empty). Purely an internal
+    // representation — the emitted byte sequence is identical to
+    // reading the XOF directly for every request-size interleaving.
+    block: Zeroizing<[u8; XOF_BLOCK_LEN]>,
+    pos: usize,
 }
 
 impl RngSource {
@@ -108,6 +123,8 @@ impl RngSource {
         Self {
             seed: Zeroizing::new(*seed),
             xof,
+            block: Zeroizing::new([0u8; XOF_BLOCK_LEN]),
+            pos: XOF_BLOCK_LEN,
         }
     }
 
@@ -133,27 +150,50 @@ impl RngSource {
     pub fn split(&mut self) -> Self {
         // Local child seed is `Zeroizing`-wrapped to close the
         // stack-leak window between XOF read and `from_seed` copy.
+        // The read goes through `fill_bytes` (not the raw XOF) so the
+        // child seed is the next 32 bytes of the emitted stream, with
+        // the prefetch cache accounted for.
         let mut child = Zeroizing::new([0u8; 32]);
-        self.xof.fill(child.as_mut_slice());
+        self.fill_bytes(child.as_mut_slice());
         Self::from_seed(&child)
     }
 
     /// Fill `buf` with `buf.len()` bytes from the XOF stream.
     ///
-    /// Stream advance is monotonic — each call advances exactly
-    /// `buf.len()` bytes (entropy accounting). Timing is bounded by
-    /// `buf.len()` only; no input-dependent timing leak.
+    /// Stream advance is monotonic — each call emits exactly the next
+    /// `buf.len()` bytes of the stream (entropy accounting). The reader
+    /// prefetches one 64-byte XOF output block at a time internally;
+    /// the prefetch changes only the cost of small draws, never the
+    /// emitted byte sequence. Timing is bounded by `buf.len()` only;
+    /// no input-dependent timing leak.
     pub fn fill_bytes(&mut self, buf: &mut [u8]) {
-        self.xof.fill(buf);
+        let mut filled = 0;
+        while filled < buf.len() {
+            if self.pos == XOF_BLOCK_LEN {
+                if buf.len() - filled >= XOF_BLOCK_LEN {
+                    // Cache empty and a full block (or more) is wanted:
+                    // serve the remainder straight from the XOF — same
+                    // bytes, no copy through the cache.
+                    self.xof.fill(&mut buf[filled..]);
+                    return;
+                }
+                self.xof.fill(self.block.as_mut_slice());
+                self.pos = 0;
+            }
+            let n = (buf.len() - filled).min(XOF_BLOCK_LEN - self.pos);
+            buf[filled..filled + n].copy_from_slice(&self.block[self.pos..self.pos + n]);
+            self.pos += n;
+            filled += n;
+        }
     }
 }
 
 impl Drop for RngSource {
     fn drop(&mut self) {
-        // `seed` auto-zeroized by Zeroizing<T>::drop. XOF state:
-        // best-effort sentinel replacement; the discarded reader
-        // drops normally (blake3 does not expose internal state
-        // wipe). See the type-level docs.
+        // `seed` and `block` auto-zeroized by Zeroizing<T>::drop. XOF
+        // state: best-effort sentinel replacement; the discarded
+        // reader drops normally (blake3 does not expose internal
+        // state wipe). See the type-level docs.
         let zero_seed = [0u8; 32];
         let mut sentinel = blake3::Hasher::new_derive_key(KDF_CONTEXT);
         sentinel.update(&zero_seed);

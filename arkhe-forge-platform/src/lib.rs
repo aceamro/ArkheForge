@@ -45,4 +45,4 @@ pub mod verifier;
 pub mod wal_export;
 
 /// ArkheForge Runtime Platform semver — matches the repo release.
-pub const PLATFORM_SEMVER: (u16, u16, u16) = (0, 14, 0);
+pub const PLATFORM_SEMVER: (u16, u16, u16) = (0, 15, 0);

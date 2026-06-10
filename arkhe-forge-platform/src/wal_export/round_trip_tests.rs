@@ -3,7 +3,8 @@
 //! End-to-end coverage of the streaming export pipeline:
 //!
 //! ```text
-//! Kernel::step → WAL records → BufferedWalSink → byte stream
+//! Kernel::submit + Kernel::step → WAL records (Submit + Step pairs)
+//!     → BufferedWalSink → byte stream
 //!     → parse_stream (consumer-side reconstruction)
 //!     → Wal::verify_chain_anchored (trust-anchored consumer check)
 //! ```
@@ -77,9 +78,10 @@ mod tests {
         }
     }
 
-    /// Build a real WAL with `n` records appended via the production
-    /// `Kernel::submit` + `Kernel::step` path. The returned `Wal` has a
-    /// valid chain hash — `Wal::verify_chain(WORLD_ID)` must succeed.
+    /// Build a real WAL with `n` dispatches (2n records — one Submit +
+    /// Step pair per dispatch) via the production `Kernel::submit` +
+    /// `Kernel::step` path. The returned `Wal` has a valid chain hash —
+    /// `Wal::verify_chain(WORLD_ID)` must succeed.
     fn build_wal_with_records(n: u64) -> Wal {
         let mut kernel = Kernel::new_with_wal(WORLD_ID, MANIFEST_DIGEST);
         kernel.register_action::<TestAction>();
@@ -93,6 +95,7 @@ mod tests {
                     inst,
                     Principal::System,
                     None,
+                    CapabilityMask::SYSTEM,
                     at,
                     TestAction::TYPE_CODE,
                     bytes,
@@ -111,7 +114,7 @@ mod tests {
             let mut sink = BufferedWalSink::new(&mut buf);
             for r in records {
                 let bytes = postcard::to_allocvec(r).expect("postcard OK");
-                sink.append_record(&bytes).expect("append OK");
+                sink.append_record(r.seq(), &bytes).expect("append OK");
             }
             sink.flush().expect("flush OK");
         }
@@ -371,14 +374,16 @@ mod tests {
 
         // Locate a record's payload section and flip a byte. The
         // streamed layout starts with [magic 8B][len 8B], so byte 16+
-        // is into the first record's bytes. Flip a byte deep inside
-        // the record (after seq + tick + instance + principal) so we
-        // perturb a chain-hash-relevant field.
+        // is into the first record's bytes. Record 0 is a Submit
+        // record; its content section (kind tag + seq + instance +
+        // principal + actor + caps + tick + type code + action bytes +
+        // allocated id) runs ~20 bytes for `TestAction`, so offset 32
+        // lands in `prev_chain_hash`/`this_chain_hash` — both verified
+        // by `verify_chain`, so the perturbation fails closed.
         //
-        // **Note**: perturb_offset = 32 assumes byte 32 within record
-        // 0 lands in the chain-hashed payload region. If a future
-        // WalRecord schema migration shifts the layout, this offset
-        // may need re-tuning to stay inside the hashed region.
+        // **Note**: if a future WalRecord schema migration shifts the
+        // layout, this offset may need re-tuning to stay inside the
+        // chain-verified region.
         let perturb_offset = STREAM_HEADER_MAGIC.len() + 8 + 32; // ~ middle of record 0
         stream[perturb_offset] ^= 0x01;
 
@@ -403,10 +408,12 @@ mod tests {
         let mut buf = Vec::<u8>::new();
         {
             let mut sink = BufferedWalSink::new(&mut buf);
-            let bytes = postcard::to_allocvec(&original.records[0]).expect("postcard OK");
-            sink.append_record(&bytes).expect("first append OK");
+            let first = &original.records[0];
+            let bytes = postcard::to_allocvec(first).expect("postcard OK");
+            sink.append_record(first.seq(), &bytes)
+                .expect("first append OK");
             // Re-submit the same record (duplicate seq=1).
-            let result = sink.append_record(&bytes);
+            let result = sink.append_record(first.seq(), &bytes);
             assert!(matches!(
                 result,
                 Err(WalExportError::AppendOnlyViolation {
@@ -522,45 +529,57 @@ mod tests {
         assert_eq!(s1, s2, "streamed export bytes match across runs");
     }
 
-    /// Bridge test verifying `BufferedWalSink::extract_seq` tracks the
-    /// L0 `WalRecord` schema's leading `seq: u64` field (DO NOT TOUCH
-    /// #7 sentinel — post-`8bf62eb` Layer A 8→7 renumber, ex-#8).
+    /// Bridge test pinning the L0 `WalRecord::seq()` contract the
+    /// export pipeline relies on (DO NOT TOUCH #7 sentinel — the v0.15
+    /// CIL epoch's kind-discriminated record layout).
     ///
-    /// Path:
-    /// 1. Build a real `Wal` with N records via the Kernel pipeline
-    ///    (the only public path, since `WalRecord.stage` is
-    ///    `pub(crate)` to `arkhe_kernel`).
-    /// 2. For each record, postcard-encode it via `to_allocvec`.
-    /// 3. Call `BufferedWalSink::extract_seq` directly on the encoded
-    ///    bytes.
-    /// 4. Assert the extracted seq matches the original record's
-    ///    `seq` field byte-equal.
+    /// The sink enforces strict `+1` succession on the seq the caller
+    /// passes; `wal_to_sink` reads that seq through the typed
+    /// `WalRecord::seq()` accessor. This test witnesses the kernel
+    /// contract that makes the pairing sound:
     ///
-    /// **Failure mode**: if a future schema migration reorders
-    /// `WalRecord` fields (placing some other field before `seq`),
-    /// `extract_seq` would parse the wrong leading value and the
-    /// assertion would fail. This catches the schema drift before
-    /// any production wire damage occurs — the L0 invariant is
-    /// `arkhe_kernel`'s "DO NOT TOUCH #7" anchor, and the Runtime
-    /// layer holds this bridging test as the cross-layer sentinel.
+    /// 1. one dispatch = one `Submit` + one `Step` record, interleaved;
+    /// 2. `seq()` is kind-agnostic and strictly `+1` monotonic from 1
+    ///    across BOTH kinds (one shared counter, not per-kind);
+    /// 3. consequently a full export streams through the sink's
+    ///    append-only gate without violation.
     ///
+    /// **Failure mode**: if a future kernel epoch splits the counter
+    /// per kind, renumbers from 0, or reorders the Submit/Step
+    /// interleave, the seq/kind assertions fail here before any
+    /// production wire damage occurs.
     #[test]
-    fn walrecord_leading_seq_invariant_bridge() {
+    fn walrecord_seq_contract_bridge() {
+        use arkhe_kernel::persist::WalRecordKind;
+
         let wal = build_wal_with_records(3);
         assert_eq!(
             wal.records.len(),
-            3,
-            "Kernel pipeline must produce 3 records"
+            6,
+            "Kernel pipeline must produce 6 records: 3 Submit + Step pairs"
         );
 
         for (idx, record) in wal.records.iter().enumerate() {
-            let bytes = postcard::to_allocvec(record).expect("postcard encode OK");
-            let extracted = BufferedWalSink::<Vec<u8>>::extract_seq(&bytes)
-                .expect("extract_seq decodes leading seq u64");
             assert_eq!(
-                extracted, record.seq,
-                "record #{idx}: extract_seq must equal record.seq (L0 schema coupling)"
+                record.seq(),
+                idx as u64 + 1,
+                "record #{idx}: seq() is kind-agnostic and +1 monotonic from 1"
+            );
+            let expected_kind = if idx % 2 == 0 {
+                WalRecordKind::Submit
+            } else {
+                WalRecordKind::Step
+            };
+            assert_eq!(
+                record.kind(),
+                expected_kind,
+                "record #{idx}: dispatch interleaves Submit then Step"
             );
         }
+
+        // The export path consumes that contract end-to-end.
+        let stream = export_records_to_stream(&wal.records);
+        let parsed = parse_stream(&stream).expect("full export passes the append-only gate");
+        assert_eq!(parsed.len(), 6);
     }
 }

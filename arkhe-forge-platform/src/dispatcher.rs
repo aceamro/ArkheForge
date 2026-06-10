@@ -5,7 +5,12 @@
 //! `dispatch` method that takes a forge `ArkheAction`, postcard-encodes
 //! its canonical bytes, calls [`Kernel::submit`] + [`Kernel::step`] in
 //! one shot, and returns the kernel's `StepReport`. The kernel handles
-//! the L0 work — authorization, dispatch, WAL append — internally.
+//! the L0 work internally: `submit` admits the action and appends a WAL
+//! `Submit` record (the Canonical Input Log's exogenous-input fact);
+//! `step` pops it, authorizes against
+//! `effective_caps(default_caps, principal, ceiling)` ∩ session ceiling,
+//! and appends a `Step` record carrying the verdict + post-state digest.
+//! One successful dispatch therefore appends a Submit + Step record pair.
 //!
 //! Forge actions are made kernel-compatible by the
 //! `arkhe-forge-macros::ArkheAction` derive: it emits both the
@@ -73,6 +78,17 @@ pub enum DispatchError {
         tick: Tick,
     },
 
+    /// The actor's `UserBinding` resolves to a user with no
+    /// `UserGdprState` lifecycle pointer — an unregistered or incompletely
+    /// registered binding target. The gate fails closed (E-user-3 C3):
+    /// admitting it would create an actor whose erasure request could
+    /// never arm the gate.
+    #[error("actor bound to user without GDPR lifecycle state: {user:?}")]
+    UnboundUserLifecycle {
+        /// Bound user with no reachable lifecycle state.
+        user: UserId,
+    },
+
     /// The admission-gate probe read corrupt view bytes while resolving the
     /// actor's `UserBinding` / `UserGdprState`. Fail closed rather than admit.
     #[error("GDPR admission probe failed: corrupt view state")]
@@ -125,10 +141,22 @@ impl RuntimeService {
 
     /// Dispatch a forge action — inject the authenticated actor through the
     /// kernel actor channel, run the L2 GDPR admission gate on it,
-    /// postcard-encode the action's canonical bytes, submit at tick `at`,
-    /// then step the kernel once with `caps`. Returns the kernel's
-    /// `StepReport` so the caller can inspect `actions_executed` /
-    /// `effects_applied` / `effects_denied`.
+    /// postcard-encode the action's canonical bytes, submit at tick `at`
+    /// under the `caps` ceiling, then step the kernel once with `caps` as
+    /// the operator session ceiling. Returns the kernel's `StepReport` so
+    /// the caller can inspect `actions_executed` / `effects_applied` /
+    /// `effects_denied`.
+    ///
+    /// ## Capability ceiling
+    ///
+    /// `caps` plays both kernel roles of this single-shot dispatch: it is
+    /// recorded on the `Submit` record as the submission ceiling (bounding
+    /// the action and any children it schedules) and passed to `step` as
+    /// the operator session ceiling. The kernel resolves the executing
+    /// action's authority as `effective_caps(default_caps, principal,
+    /// caps) ∩ caps` — `Principal::System` holds no blanket bypass, so an
+    /// instance whose `default_caps` lacks a SYSTEM-gated capability
+    /// (`ScheduleAction` / `SendSignal`) denies it for every principal.
     ///
     /// ## Single source of truth for the acting actor
     ///
@@ -140,7 +168,7 @@ impl RuntimeService {
     ///
     /// `dispatch` threads this actor into [`Kernel::submit`]'s actor channel
     /// (as `Option<EntityId>` via [`ActorId::get`]). The kernel records it in
-    /// the WAL record and replays it into `KernelActionContext::actor`, which
+    /// the WAL `Submit` record and replays it into `KernelActionContext::actor`, which
     /// the [`arkhe_forge_core::bridge`] injects as the forge
     /// [`ActionContext::acting_actor`]. A user-scoped compute body reads its
     /// acting identity from THAT channel and stamps it into the stored record
@@ -148,9 +176,9 @@ impl RuntimeService {
     /// wire-controlled actor field to substitute, so the C3
     /// actor-substitution attack is structurally impossible. A user-scoped
     /// action submitted with `authenticated_actor == None` is rejected inside
-    /// compute (the bridge collapses the rejection to no Ops, so it never
-    /// reaches the WAL). A system action that does not read `acting_actor`
-    /// proceeds with `None`.
+    /// compute (the bridge collapses the rejection to no Ops — the WAL holds
+    /// the Submit/Step envelope but no effect materializes). A system action
+    /// that does not read `acting_actor` proceeds with `None`.
     ///
     /// ## GDPR `ErasurePending` admission gate (C3)
     ///
@@ -164,12 +192,18 @@ impl RuntimeService {
     /// that injected actor, and REJECTS the action before `submit` if the
     /// backing user is `ErasurePending`. The gate is SOUND — the actor it
     /// gates on is the authenticated caller, the same single source of truth
-    /// the compute records. It is also LIVE:
+    /// the compute records. Its liveness has a production precondition: the
+    /// gate resolves actor → user through the `UserBinding` that
+    /// [`RegisterActor`](arkhe_forge_core::actor::RegisterActor) writes onto
+    /// the actor entity at registration time — an actor with no binding has
+    /// no resolvable user scope and soft-passes (system / anonymous actors).
+    /// For an actor registered through `RegisterActor`,
     /// [`GdprEraseUser`](arkhe_forge_core::user::GdprEraseUser) transitions
     /// the user's `UserGdprState` to `ErasurePending` with a blind write
     /// (valid on the viewless compute path), so once erasure is requested
     /// this gate rejects the user's subsequent actions before `submit` (never
-    /// reaches the WAL), as this method's tests demonstrate.
+    /// reaches the WAL), as this method's production-path test demonstrates
+    /// end-to-end.
     ///
     /// # Errors
     ///
@@ -209,6 +243,9 @@ impl RuntimeService {
                     ActionError::UserErasurePending { user, .. } => {
                         Err(DispatchError::ErasurePending { user, tick: at })
                     }
+                    ActionError::UserLifecycleUnresolved { user } => {
+                        Err(DispatchError::UnboundUserLifecycle { user })
+                    }
                     // `ensure_actor_eligible` otherwise only fails with an
                     // `InvalidInput` on corrupt view bytes; fail closed.
                     _ => Err(DispatchError::ProbeViewCorrupt),
@@ -217,13 +254,14 @@ impl RuntimeService {
         }
 
         // Inject the authenticated actor through the kernel actor channel —
-        // the single source of truth. The kernel records it in the WAL and
-        // replays it into compute via the bridge.
+        // the single source of truth. The kernel records it in the WAL
+        // Submit record and replays it into compute via the bridge.
         let bytes = action.canonical_bytes();
         self.kernel.submit(
             instance,
             principal,
             authenticated_actor.map(ActorId::get),
+            caps,
             at,
             A::TYPE_CODE,
             bytes,
@@ -241,24 +279,49 @@ impl RuntimeService {
 
 /// Append every record of `wal` into the buffered sink, then flush.
 /// Each record is postcard-serialized via the kernel's stable
-/// [`arkhe_kernel::WalRecord`] wire shape (DO NOT TOUCH #7 —
-/// `seq: u64` first declared field) and the sink frames with the
-/// standard magic + length-prefix per `wal_export`'s firm
-/// requirements.
+/// [`arkhe_kernel::WalRecord`] wire shape (DO NOT TOUCH #7 — frozen
+/// per-variant field order of the kind-discriminated `Submit`/`Step`
+/// content) and the sink frames with the standard magic +
+/// length-prefix per `wal_export`'s firm requirements. The record's
+/// kind-agnostic monotonic sequence is read through the typed
+/// [`WalRecord::seq`](arkhe_kernel::WalRecord) accessor and handed to
+/// the sink, which enforces the append-only succession — the sink
+/// never parses kernel record bytes itself.
+///
+/// The export streams within the sink's capacity: the encode scratch is
+/// reused across records (no per-record allocation), and when the next
+/// frame would overflow the sink's buffer the sink is flushed mid-stream
+/// and the append retried — `flush` drains the buffer while preserving
+/// the stream header and seq succession, so a WAL of any size exports
+/// through a bounded-memory sink.
 ///
 /// # Errors
 ///
 /// Returns [`WalSinkError::Encode`] if a record fails postcard
 /// serialization (unreachable in practice — `WalRecord` derives
 /// `Serialize` over a stable shape) or [`WalSinkError::Sink`] if the
-/// sink rejects the framed record (length, append-only, overflow).
+/// sink rejects the framed record (length, append-only, or a frame
+/// larger than the sink's whole capacity).
 pub fn wal_to_sink<W: std::io::Write>(
     wal: &Wal,
     sink: &mut BufferedWalSink<W>,
 ) -> Result<(), WalSinkError> {
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
     for record in &wal.records {
-        let bytes = postcard::to_allocvec(record)?;
-        sink.append_record(&bytes)?;
+        scratch.clear();
+        scratch = postcard::to_extend(record, scratch)?;
+        match sink.append_record(record.seq(), &scratch) {
+            Ok(()) => {}
+            Err(WalExportError::BufferOverflow { .. }) => {
+                // Drain and retry once — flush clears the buffer without
+                // touching header/seq state, so any frame that fits an
+                // empty sink fits now. A second overflow means the frame
+                // exceeds the sink capacity outright; surface it.
+                sink.flush()?;
+                sink.append_record(record.seq(), &scratch)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     sink.flush()?;
     Ok(())
@@ -374,9 +437,10 @@ mod tests {
 
     /// `wal_to_sink` round-trips: dispatch one action, export WAL,
     /// stream into `BufferedWalSink<Vec<u8>>` — sink buffer ends up
-    /// non-empty + starts with the stream-header magic.
+    /// non-empty + starts with the stream-header magic. One dispatch
+    /// appends a Submit + Step record pair.
     #[test]
-    fn wal_to_sink_round_trips_single_record() {
+    fn wal_to_sink_round_trips_single_dispatch() {
         use arkhe_kernel::abi::EntityId;
         use arkhe_kernel::state::{ActionCompute, ActionContext, Op};
         use arkhe_kernel::ArkheAction;
@@ -410,7 +474,7 @@ mod tests {
             .unwrap();
 
         let wal = svc.export_wal().expect("WAL is configured");
-        assert_eq!(wal.records.len(), 1);
+        assert_eq!(wal.records.len(), 2, "one dispatch = Submit + Step pair");
 
         let mut buffer: Vec<u8> = Vec::new();
         let mut sink = BufferedWalSink::new(&mut buffer);
@@ -424,8 +488,76 @@ mod tests {
         );
     }
 
+    /// A WAL larger than the sink capacity exports through mid-stream
+    /// drain-and-retry: the framed output is byte-identical to an
+    /// export through a sink large enough to hold the whole WAL.
+    #[test]
+    fn wal_to_sink_drains_mid_stream_when_capacity_is_tight() {
+        use arkhe_kernel::abi::EntityId;
+        use arkhe_kernel::state::{ActionCompute, ActionContext, Op};
+        use arkhe_kernel::ArkheAction;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize, ArkheAction)]
+        #[arkhe(type_code = 0x0001_5106, schema_version = 1)]
+        struct SpawnAt(u64);
+
+        impl ActionCompute for SpawnAt {
+            fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
+                vec![Op::SpawnEntity {
+                    id: EntityId::new(self.0.max(1)).unwrap(),
+                    owner: Principal::System,
+                }]
+            }
+        }
+
+        fn export(records_capacity: Option<usize>, wal: &Wal) -> Vec<u8> {
+            let mut buffer: Vec<u8> = Vec::new();
+            {
+                let mut sink = match records_capacity {
+                    Some(cap) => BufferedWalSink::with_capacity(&mut buffer, cap),
+                    None => BufferedWalSink::new(&mut buffer),
+                };
+                wal_to_sink(wal, &mut sink).expect("wal_to_sink succeeds");
+            }
+            buffer
+        }
+
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<SpawnAt>();
+        let inst = svc.create_instance(InstanceConfig::default());
+        for i in 1..=4 {
+            svc.dispatch(
+                inst,
+                Principal::System,
+                &SpawnAt(i),
+                Tick(i),
+                CapabilityMask::SYSTEM,
+                None,
+            )
+            .unwrap();
+        }
+        let wal = svc.export_wal().expect("WAL configured");
+        assert_eq!(wal.records.len(), 8);
+
+        let roomy = export(None, &wal);
+        // Capacity that holds the header + roughly one frame — every
+        // subsequent append overflows and must drain mid-stream.
+        let largest_frame = wal
+            .records
+            .iter()
+            .map(|r| 8 + postcard::to_allocvec(r).unwrap().len())
+            .max()
+            .unwrap();
+        let tight = export(Some(8 + largest_frame), &wal);
+        assert_eq!(
+            tight, roomy,
+            "drain-and-retry export must be byte-identical to a roomy export"
+        );
+    }
+
     /// Multi-record dispatch + export: 3 ticks × 1 action each → 3
-    /// WAL records; `wal_to_sink` frames all three.
+    /// Submit + Step pairs (6 WAL records); `wal_to_sink` frames all six.
     #[test]
     fn wal_to_sink_handles_multi_record_stream() {
         use arkhe_kernel::abi::EntityId;
@@ -461,7 +593,7 @@ mod tests {
             .unwrap();
         }
         let wal = svc.export_wal().expect("WAL configured");
-        assert_eq!(wal.records.len(), 3);
+        assert_eq!(wal.records.len(), 6, "3 dispatches = 3 Submit + Step pairs");
 
         let mut buffer: Vec<u8> = Vec::new();
         let mut sink = BufferedWalSink::new(&mut buffer);
@@ -470,79 +602,34 @@ mod tests {
         assert!(buffer.starts_with(&crate::wal_export::STREAM_HEADER_MAGIC));
     }
 
-    /// End-to-end proof of the #2 L2 GDPR admission gate.
+    /// End-to-end liveness proof of the L2 GDPR admission gate through
+    /// PRODUCTION actions only — no test-only seeding.
     ///
-    /// A test-only seeding action writes a `UserBinding` (actor → user) plus a
-    /// `UserGdprState { status }` into a live kernel instance so the
-    /// `InstanceView` the gate reads is populated. A real forge `CreateSpace`
-    /// for an `ErasurePending` user is then REJECTED at dispatch (no WAL
-    /// record), while the same action for an `Active` user proceeds and
-    /// appends a record. This exercises the full
-    /// `RuntimeService::dispatch -> injected actor -> instance_view ->
-    /// ensure_actor_eligible` path that the viewless bridge cannot cover.
+    /// `RegisterUser` spawns the user entity (with `UserGdprState::Active`),
+    /// `RegisterActor` spawns the actor entity and writes the actor → user
+    /// `UserBinding` the gate resolves through, and the actor's user-scoped
+    /// `CreateSpace` proceeds while the user is `Active`. After
+    /// `GdprEraseUser` flips the user to `ErasurePending`, the same actor's
+    /// next user-scoped action is REJECTED at dispatch with
+    /// `DispatchError::ErasurePending` BEFORE `submit` (no WAL record). This
+    /// exercises the full `RuntimeService::dispatch -> injected actor ->
+    /// instance_view -> ensure_actor_eligible` path that the viewless bridge
+    /// cannot cover, with every state write performed by a production action.
     #[test]
-    fn dispatch_rejects_erasure_pending_actor_before_wal() {
-        use arkhe_forge_core::actor::{ActorId, UserBinding};
-        use arkhe_forge_core::brand::ShellId;
-        use arkhe_forge_core::component::{ArkheComponent, BoundedString};
-        use arkhe_forge_core::space::{CreateSpace, SpaceConfigDraft, SpaceKind, Visibility};
-        use arkhe_forge_core::user::{GdprStatus, UserGdprState, UserId};
-        use arkhe_kernel::abi::{EntityId, TypeCode};
-        use arkhe_kernel::state::{ActionCompute, ActionContext, Op};
-        use arkhe_kernel::ArkheAction;
-        use serde::{Deserialize, Serialize};
+    fn dispatch_gdpr_gate_is_live_through_production_binding_path() {
+        use arkhe_forge_core::actor::{ActorKind, ActorProfile, RegisterActor, UserBinding};
+        use arkhe_forge_core::user::{
+            AuthCredential, AuthKind, GdprEraseUser, KdfKind, KdfParams, RegisterUser, UserId,
+            UserProfile,
+        };
 
-        // Test-only kernel action: stage `UserBinding` on the actor entity and
-        // `UserGdprState` on the user entity so the gate's `InstanceView` reads
-        // are populated. Carries the desired GDPR status as a wire byte.
-        #[derive(Serialize, Deserialize, ArkheAction)]
-        #[arkhe(type_code = 0x0001_5105, schema_version = 1)]
-        struct SeedBinding {
-            actor: u64,
-            user: u64,
-            erasing: bool,
-        }
-
-        impl ActionCompute for SeedBinding {
-            fn compute(&self, _ctx: &ActionContext<'_>) -> Vec<Op> {
-                let binding = UserBinding {
-                    schema_version: 1,
-                    user_id: UserId::new(EntityId::new(self.user).unwrap()),
-                };
-                let state = UserGdprState {
-                    schema_version: 1,
-                    status: if self.erasing {
-                        GdprStatus::ErasurePending
-                    } else {
-                        GdprStatus::Active
-                    },
-                };
-                let bb = postcard::to_allocvec(&binding).unwrap();
-                let sb = postcard::to_allocvec(&state).unwrap();
-                vec![
-                    Op::SetComponent {
-                        entity: EntityId::new(self.actor).unwrap(),
-                        type_code: TypeCode(UserBinding::TYPE_CODE),
-                        size: bb.len() as u64,
-                        bytes: bytes::Bytes::from(bb),
-                    },
-                    Op::SetComponent {
-                        entity: EntityId::new(self.user).unwrap(),
-                        type_code: TypeCode(UserGdprState::TYPE_CODE),
-                        size: sb.len() as u64,
-                        bytes: bytes::Bytes::from(sb),
-                    },
-                ]
-            }
-        }
-
-        fn create_space() -> CreateSpace {
+        fn create_space(slug: &str) -> CreateSpace {
             CreateSpace {
                 schema_version: 1,
                 config: SpaceConfigDraft {
                     schema_version: 1,
                     shell_id: ShellId([0xC3; 16]),
-                    slug: BoundedString::<32>::new("forbidden").unwrap(),
+                    slug: BoundedString::<32>::new(slug).unwrap(),
                     kind: SpaceKind::Flat,
                     visibility: Visibility::Public,
                     parent_space: None,
@@ -551,84 +638,207 @@ mod tests {
             }
         }
 
-        // --- ErasurePending user is rejected, no WAL record ---
+        /// Read the single component of type `C` in the live instance,
+        /// returning its entity id — recovers the runtime-derived user /
+        /// actor ids without predicting the id derivation.
+        fn single_entity_with<C: arkhe_forge_core::component::ArkheComponent>(
+            svc: &RuntimeService,
+            inst: InstanceId,
+        ) -> Option<EntityId> {
+            let view = svc.kernel.instance_view(inst)?;
+            let mut found = view
+                .components_by_type(TypeCode(C::TYPE_CODE))
+                .map(|(eid, _)| eid);
+            let first = found.next();
+            assert!(found.next().is_none(), "expected exactly one component");
+            first
+        }
+
         let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
-        svc.register_action::<SeedBinding>();
+        svc.register_action::<RegisterUser>();
+        svc.register_action::<RegisterActor>();
+        svc.register_action::<GdprEraseUser>();
         svc.register_action::<CreateSpace>();
         let inst = svc.create_instance(InstanceConfig::default());
 
+        // 1 — register the user (system-scoped; spawns the user entity and
+        // seeds `UserGdprState::Active`).
         svc.dispatch(
             inst,
             Principal::System,
-            &SeedBinding {
-                actor: 8,
-                user: 7,
-                erasing: true,
+            &RegisterUser {
+                schema_version: 1,
+                profile: UserProfile {
+                    schema_version: 1,
+                    created_tick: Tick(1),
+                    primary_auth_kind: AuthKind::Passkey,
+                },
+                credential: AuthCredential {
+                    schema_version: 1,
+                    kind: AuthKind::Passkey,
+                    kdf: KdfKind::Argon2id,
+                    salt: [0u8; 16],
+                    credential_hash: [0u8; 32],
+                    kdf_params: KdfParams {
+                        m_cost: AuthCredential::MIN_ARGON2ID_M_COST,
+                        t_cost: AuthCredential::MIN_ARGON2ID_T_COST,
+                        p_cost: AuthCredential::MIN_ARGON2ID_P_COST,
+                    },
+                    expires_tick: None,
+                    bound_tick: Tick(1),
+                },
             },
             Tick(1),
             CapabilityMask::SYSTEM,
             None,
         )
-        .expect("seed must succeed");
-        let after_seed = svc.kernel.wal_record_count();
-        assert_eq!(after_seed, Some(1), "seed action appends one record");
+        .expect("RegisterUser must succeed");
+        let user = UserId::new(
+            single_entity_with::<UserProfile>(&svc, inst).expect("user entity spawned"),
+        );
 
-        // Authenticated as actor 8 — passes the auth gate, then the
-        // erasure gate rejects because actor 8's user is ErasurePending.
+        // 2 — register the actor bound to that user (system-scoped
+        // registration flow; writes the `UserBinding` the gate reads).
+        svc.dispatch(
+            inst,
+            Principal::System,
+            &RegisterActor {
+                schema_version: 1,
+                profile: ActorProfile {
+                    schema_version: 1,
+                    shell_id: ShellId([0xC3; 16]),
+                    handle: BoundedString::<32>::new("alice").unwrap(),
+                    kind: ActorKind::Human,
+                    created_tick: Tick(2),
+                },
+                user,
+            },
+            Tick(2),
+            CapabilityMask::SYSTEM,
+            None,
+        )
+        .expect("RegisterActor must succeed");
+        let actor = ActorId::new(
+            single_entity_with::<UserBinding>(&svc, inst).expect("actor entity spawned"),
+        );
+
+        // 3 — while the user is Active, the actor's user-scoped action
+        // passes the gate and lands in the WAL.
+        let report = svc
+            .dispatch(
+                inst,
+                Principal::System,
+                &create_space("welcome"),
+                Tick(3),
+                CapabilityMask::SYSTEM,
+                Some(actor),
+            )
+            .expect("Active user's actor must proceed");
+        assert_eq!(report.actions_executed, 1);
+
+        // 4 — request erasure (production blind write of `ErasurePending`).
+        svc.dispatch(
+            inst,
+            Principal::System,
+            &GdprEraseUser {
+                schema_version: 1,
+                user,
+            },
+            Tick(4),
+            CapabilityMask::SYSTEM,
+            None,
+        )
+        .expect("GdprEraseUser must succeed");
+
+        // 5 — the same actor is now rejected BEFORE submit: the error names
+        // the backing user and no WAL record is appended.
+        let wal_before = svc.kernel.wal_record_count();
         let rejected = svc.dispatch(
             inst,
             Principal::System,
-            &create_space(),
-            Tick(2),
+            &create_space("forbidden"),
+            Tick(5),
             CapabilityMask::SYSTEM,
-            Some(ActorId::new(EntityId::new(8).unwrap())),
+            Some(actor),
         );
         match rejected {
-            Err(DispatchError::ErasurePending { user, tick }) => {
-                assert_eq!(user, UserId::new(EntityId::new(7).unwrap()));
-                assert_eq!(tick, Tick(2));
+            Err(DispatchError::ErasurePending { user: u, tick }) => {
+                assert_eq!(u, user, "rejection must name the backing user");
+                assert_eq!(tick, Tick(5));
             }
             other => panic!("expected ErasurePending rejection, got {:?}", other),
         }
         assert_eq!(
             svc.kernel.wal_record_count(),
-            Some(1),
+            wal_before,
             "rejected action must NOT append a WAL record",
         );
+    }
 
-        // --- Active user proceeds and appends a record ---
-        let mut svc2 = RuntimeService::new([0u8; 32], [0u8; 32]);
-        svc2.register_action::<SeedBinding>();
-        svc2.register_action::<CreateSpace>();
-        let inst2 = svc2.create_instance(InstanceConfig::default());
-        svc2.dispatch(
-            inst2,
+    /// Fail-closed companion to the production-binding liveness test: an
+    /// actor whose `UserBinding` names a NEVER-registered user (no
+    /// `UserGdprState` reachable) is rejected at admission with
+    /// `UnboundUserLifecycle` — admitting it would create a permanently
+    /// ungateable actor (erasing the unregistered user no-ops).
+    #[test]
+    fn dispatch_rejects_actor_bound_to_unregistered_user() {
+        use arkhe_forge_core::actor::{ActorKind, ActorProfile, RegisterActor, UserBinding};
+        use arkhe_forge_core::user::UserId;
+
+        let mut svc = RuntimeService::new([0u8; 32], [0u8; 32]);
+        svc.register_action::<RegisterActor>();
+        svc.register_action::<CreateSpace>();
+        let inst = svc.create_instance(InstanceConfig::default());
+
+        // Bind an actor to a user id that was never registered.
+        let phantom_user = UserId::new(EntityId::new(999).unwrap());
+        svc.dispatch(
+            inst,
             Principal::System,
-            &SeedBinding {
-                actor: 8,
-                user: 7,
-                erasing: false,
+            &RegisterActor {
+                schema_version: 1,
+                profile: ActorProfile {
+                    schema_version: 1,
+                    shell_id: ShellId([0xC3; 16]),
+                    handle: BoundedString::<32>::new("ghost").unwrap(),
+                    kind: ActorKind::Human,
+                    created_tick: Tick(1),
+                },
+                user: phantom_user,
             },
             Tick(1),
             CapabilityMask::SYSTEM,
             None,
         )
-        .expect("seed must succeed");
-        let report = svc2
-            .dispatch(
-                inst2,
-                Principal::System,
-                &create_space(),
-                Tick(2),
-                CapabilityMask::SYSTEM,
-                Some(ActorId::new(EntityId::new(8).unwrap())),
-            )
-            .expect("Active user must proceed");
-        assert_eq!(report.actions_executed, 1);
+        .expect("RegisterActor itself is system-scoped and succeeds");
+        let actor_entity = svc
+            .kernel
+            .instance_view(inst)
+            .expect("instance live")
+            .components_by_type(TypeCode(UserBinding::TYPE_CODE))
+            .map(|(eid, _)| eid)
+            .next()
+            .expect("actor entity spawned with binding");
+
+        let wal_before = svc.kernel.wal_record_count();
+        let rejected = svc.dispatch(
+            inst,
+            Principal::System,
+            &user_create_space(),
+            Tick(2),
+            CapabilityMask::SYSTEM,
+            Some(ActorId::new(actor_entity)),
+        );
+        match rejected {
+            Err(DispatchError::UnboundUserLifecycle { user }) => {
+                assert_eq!(user, phantom_user, "rejection names the phantom user");
+            }
+            other => panic!("expected UnboundUserLifecycle, got {:?}", other),
+        }
         assert_eq!(
-            svc2.kernel.wal_record_count(),
-            Some(2),
-            "Active-user action appends a second WAL record",
+            svc.kernel.wal_record_count(),
+            wal_before,
+            "rejected action must NOT append a WAL record",
         );
     }
 
@@ -698,8 +908,8 @@ mod tests {
         assert_eq!(report.actions_executed, 1);
         assert_eq!(
             svc.kernel.wal_record_count(),
-            Some(1),
-            "authenticated user-scoped action appends a WAL record",
+            Some(2),
+            "authenticated user-scoped action appends a Submit + Step pair",
         );
         assert_eq!(
             stored_space_creator(&svc, inst),
@@ -784,17 +994,24 @@ mod tests {
         .expect("authenticated actor proceeds");
 
         let wal = svc.export_wal().expect("WAL configured");
-        assert_eq!(wal.records.len(), 1);
-        // The WAL record's actor IS the injected authenticated actor.
+        assert_eq!(wal.records.len(), 2, "one dispatch = Submit + Step pair");
+        // The Submit record's actor IS the injected authenticated actor.
+        let arkhe_kernel::persist::WalRecordContent::Submit {
+            actor: recorded_actor,
+            ..
+        } = wal.records[0].content
+        else {
+            panic!("record 0 of a dispatch must be the Submit record");
+        };
         assert_eq!(
-            wal.records[0].actor,
+            recorded_actor,
             Some(EntityId::new(7).unwrap()),
-            "WAL must record the injected acting actor as canonical input",
+            "WAL Submit record must carry the injected acting actor as canonical input",
         );
 
         // Replay the recorded action into a fresh service through the same
-        // submit/step path — the replayed actor comes from the WAL record, so
-        // the reconstructed Space records the same creator.
+        // submit/step path — the replayed actor comes from the WAL Submit
+        // record, so the reconstructed Space records the same creator.
         let mut replay = RuntimeService::new([0u8; 32], [0u8; 32]);
         replay.register_action::<CreateSpace>();
         let rinst = replay.create_instance(InstanceConfig::default());
@@ -805,7 +1022,7 @@ mod tests {
                 &user_create_space(),
                 Tick(1),
                 CapabilityMask::SYSTEM,
-                wal.records[0].actor.map(ActorId::new),
+                recorded_actor.map(ActorId::new),
             )
             .expect("replay proceeds");
         assert_eq!(

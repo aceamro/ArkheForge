@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge-macros"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Derive + attribute macros for ArkheForge Runtime: ArkheComponent / ArkheAction / ArkheEvent + #[arkhe_pure] (E14.L1 Subset-Rust purity). Validates TYPE_CODE ranges, BAND classification, schema_version field shape, and Action::compute purity at compile time."
@@ -22,7 +22,7 @@ quote                     = "1"
 proc-macro2               = "1"
 darling                   = "0.20"
 # E14.L1 Subset-Rust purity check, called from `#[arkhe_pure]`.
-arkhe-subset-rust-check   = { path = "../arkhe-subset-rust-check", version = "0.14" }
+arkhe-subset-rust-check   = { path = "../arkhe-subset-rust-check", version = "0.15" }
 
 [dev-dependencies]
 trybuild          = "1.0"

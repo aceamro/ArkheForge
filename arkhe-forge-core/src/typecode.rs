@@ -77,7 +77,7 @@ pub mod core_event {
     pub const BACKUP_ERASURE_PROPAGATED: u32 = 0x0003_0F04;
     /// `GdprPolicyViolation` — L1 compute reject audit.
     pub const GDPR_POLICY_VIOLATION: u32 = 0x0003_0F05;
-    /// `SignatureClassPolicy` — chain-anchored policy (E13 axiom).
+    /// `SignatureClassPolicy` — replay-anchored policy (E13 axiom).
     pub const SIGNATURE_CLASS_POLICY: u32 = 0x0003_0F06;
     /// `CrossShellActivity` — replay/admin reject audit.
     pub const CROSS_SHELL_ACTIVITY: u32 = 0x0003_0F07;

@@ -158,11 +158,14 @@ pub enum ProgressScope {
 
 // ===================== Core Events =====================
 
-/// `RuntimeBootstrap` — chain-anchored bootstrap receipt (the E12 axiom).
+/// `RuntimeBootstrap` — replay-anchored bootstrap receipt (the E12 axiom).
 ///
 /// Emitted at instance first-tick, manifest change, and runtime semver bump.
-/// The `manifest_digest` + `typecode_pins` pair is how WAL replay validates
-/// that the runtime environment matches what produced the log.
+/// The receipt is re-derived bit-identically from the chain-recorded
+/// `Submit` inputs on every replay, and the kernel's default `replay_into`
+/// validates the WAL header's `manifest_digest`
+/// (`ReplayError::ManifestDigestMismatch`) — together these pin the runtime
+/// environment to what produced the log.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F01, schema_version = 1)]
 pub struct RuntimeBootstrap {
@@ -196,7 +199,8 @@ pub struct UserErasureScheduled {
 }
 
 /// `UserErasureCompleted` — crypto-erasure completion receipt
-/// (chain-anchored transparency).
+/// (replay-anchored transparency — re-derived bit-identically from
+/// chain-recorded `Submit` inputs).
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F03, schema_version = 1)]
 pub struct UserErasureCompleted {
@@ -248,8 +252,9 @@ pub struct GdprPolicyViolation {
     pub action_type_code: TypeCode,
 }
 
-/// `SignatureClassPolicy` — chain-anchored shell audit signature policy
-/// (the E13 axiom). Downgrade-resistant by construction.
+/// `SignatureClassPolicy` — replay-anchored shell audit signature policy
+/// (the E13 axiom; re-derived bit-identically from chain-recorded
+/// `Submit` inputs). Downgrade-resistant by construction.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheEvent)]
 #[arkhe(type_code = 0x0003_0F06, schema_version = 1)]
 pub struct SignatureClassPolicy {
@@ -498,8 +503,8 @@ pub struct ReplicaIdAllocation {
     /// replica, tick) tuple. Defends against replay of older
     /// allocation requests.
     pub allocation_nonce: u32,
-    /// Tick at which the allocation became effective (chain-anchor
-    /// for ordering relative to other federation events).
+    /// Tick at which the allocation became effective (replay-derived
+    /// ordering anchor relative to other federation events).
     pub effective_tick: Tick,
     /// Federation-registry attestation over (federation_id,
     /// replica_id, allocation_nonce, effective_tick). 64-byte

@@ -3,8 +3,10 @@
 //! Enforcement tier (CHANGELOG "Axiom enforcement"):
 //! - **Type-system proven**: E-actor-2, E-actor-4 — sealed `ActorState`
 //!   typestate + invariant-lifetime brand make violations uncompilable.
-//! - **Compute-level machine-checked**: E-actor-3 — `(shell_id, handle)`
-//!   uniqueness gate via `ActionContext::actor_by_handle` lookup, surfaced
+//! - **Compute-level machine-checked**: E-actor-2 production binding write
+//!   (`RegisterActor::compute` spawns the actor entity and attaches
+//!   `UserBinding`) and E-actor-3 — `(shell_id, handle)` uniqueness gate in
+//!   `RegisterActor::compute` via `ActionContext::actor_by_handle`, surfaced
 //!   as `ActionError::ActorHandleCollision`.
 //! - **Shape-only**: E-actor-1, E-actor-5 — wire `TYPE_CODE` /
 //!   `SCHEMA_VERSION` are pinned, but the matching compute paths (single
@@ -12,9 +14,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use arkhe_forge_core::action::ActionCompute;
 use arkhe_forge_core::actor::{
-    Actor, ActorId, ActorKind, ActorProfile, ActorState, Anonymous, Authenticated, Suspended,
-    UserBinding,
+    Actor, ActorId, ActorKind, ActorProfile, ActorState, Anonymous, Authenticated, RegisterActor,
+    Suspended, UserBinding,
 };
 use arkhe_forge_core::brand::{ShellBrand, ShellId};
 use arkhe_forge_core::component::{ArkheComponent, BoundedString};
@@ -192,4 +195,79 @@ fn e_actor_3_handle_collision_compute_rejects() {
         pass_decision.is_ok(),
         "free `(shell, handle)` must not trip the collision gate"
     );
+
+    // Production compute drives the same gate — `RegisterActor` consults the
+    // bound index and rejects an occupied `(shell, handle)` before spawning.
+    let mut c = ActionContext::new(
+        [0x44u8; 32],
+        InstanceId::new(1).unwrap(),
+        Tick(7),
+        Principal::System,
+        CapabilityMask::SYSTEM,
+    )
+    .with_actor_handle_index(&index);
+    let err = RegisterActor {
+        schema_version: 1,
+        profile: ActorProfile {
+            schema_version: 1,
+            shell_id: shell_a,
+            handle: handle_alice.clone(),
+            kind: ActorKind::Human,
+            created_tick: Tick(7),
+        },
+        user: UserId::new(eid(2)),
+    }
+    .compute(&mut c)
+    .expect_err("RegisterActor must reject the occupied handle");
+    assert!(
+        matches!(err, ActionError::ActorHandleCollision { shell_id, ref handle }
+            if shell_id == shell_a && *handle == handle_alice),
+        "got {err:?}",
+    );
+    assert!(c.ops().is_empty(), "no actor entity spawned on rejection");
+}
+
+/// **E-actor-2 (compute-MC, production path)** — `RegisterActor` is the
+/// production write of the actor → user `UserBinding`: it spawns the actor
+/// entity (spawn-then-set — the kernel ledger no-ops `SetComponent` on a
+/// never-spawned entity) and attaches the binding that
+/// `ActionContext::ensure_actor_eligible` resolves the backing user through.
+#[test]
+fn e_actor_2_register_actor_writes_production_user_binding() {
+    let user = UserId::new(eid(7));
+    let mut c = ActionContext::new(
+        [0x44u8; 32],
+        InstanceId::new(1).unwrap(),
+        Tick(7),
+        Principal::System,
+        CapabilityMask::SYSTEM,
+    );
+    RegisterActor {
+        schema_version: 1,
+        profile: ActorProfile {
+            schema_version: 1,
+            shell_id: ShellId([0xAB; 16]),
+            handle: BoundedString::<32>::new("alice").unwrap(),
+            kind: ActorKind::Human,
+            created_tick: Tick(7),
+        },
+        user,
+    }
+    .compute(&mut c)
+    .expect("register actor");
+
+    let actor_entity = c
+        .ops()
+        .iter()
+        .find_map(|op| match op {
+            arkhe_kernel::state::Op::SpawnEntity { id, .. } => Some(*id),
+            _ => None,
+        })
+        .expect("RegisterActor spawns the actor entity first");
+    // The staged binding resolves actor → user exactly as the gate reads it.
+    let resolved = c
+        .authenticated_actor_user(ActorId::new(actor_entity))
+        .expect("staged binding decodes")
+        .expect("binding present on the spawned actor");
+    assert_eq!(resolved, user, "binding must name the explicit target user");
 }

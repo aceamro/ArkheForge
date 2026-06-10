@@ -12,7 +12,9 @@
 //! The sealed [`RandInt`] trait is implemented for `u8` / `u16` /
 //! `u32` / `u64` / `usize`. Signed and `u128` are excluded —
 //! Lemire's widening multiplication is only defined for u32 → u64
-//! and u64 → u128.
+//! and u64 → u128. `usize` samples through the u64 path on every
+//! pointer width, so values and stream consumption are identical
+//! across 32-bit and 64-bit targets.
 
 use core::ops::{Range, RangeInclusive};
 
@@ -116,42 +118,31 @@ impl RandInt for u64 {
 
 impl sealed::Sealed for usize {}
 impl RandInt for usize {
+    // INVARIANT: `usize` always samples through the u64 Lemire path,
+    // never a pointer-width-selected one — otherwise the same seed
+    // would yield different values AND different stream consumption on
+    // 32-bit vs 64-bit targets, and `shuffle` (which draws `usize`)
+    // would produce divergent permutations across platforms.
     #[inline]
     fn lemire_bounded(rng: &mut RngSource, range_size: Self) -> Self {
-        #[cfg(target_pointer_width = "32")]
-        {
-            lemire_u32(rng, range_size as u32) as usize
-        }
-        #[cfg(target_pointer_width = "64")]
-        {
-            lemire_u64(rng, range_size as u64) as usize
-        }
+        // The draw is < range_size <= usize::MAX, so the narrowing
+        // cast back to usize is lossless on every pointer width.
+        lemire_u64(rng, range_size as u64) as usize
     }
     #[inline]
     fn lemire_inclusive(rng: &mut RngSource, low: Self, high: Self) -> Self {
-        // Widen one step past pointer width so the full-range span never
-        // overflows; pass 0 to the underlying Lemire as the "full range"
-        // (2^32 / 2^64) sentinel.
-        #[cfg(target_pointer_width = "32")]
-        {
-            let span = (high as u64) - (low as u64) + 1;
-            let n = if span == (1u64 << 32) {
-                0u32
-            } else {
-                span as u32
-            };
-            low.wrapping_add(lemire_u32(rng, n) as usize)
-        }
-        #[cfg(target_pointer_width = "64")]
-        {
-            let span = (high as u128) - (low as u128) + 1;
-            let n = if span == (1u128 << 64) {
-                0u64
-            } else {
-                span as u64
-            };
-            low.wrapping_add(lemire_u64(rng, n) as usize)
-        }
+        // Widen to u128 so the full-range span never overflows; pass 0
+        // to `lemire_u64` as the "full range" (2^64) sentinel. On
+        // 32-bit targets the maximal span is 2^32, which fits u64 and
+        // is an ordinary (non-sentinel) draw. The draw is < span, so
+        // the narrowing cast back to usize is lossless.
+        let span = (high as u128) - (low as u128) + 1;
+        let n = if span == (1u128 << 64) {
+            0u64
+        } else {
+            span as u64
+        };
+        low.wrapping_add(lemire_u64(rng, n) as usize)
     }
     #[inline]
     fn add(self, n: Self) -> Self {
@@ -377,5 +368,40 @@ mod tests {
     fn empty_exclusive_range_panics_in_debug() {
         let mut r = rng();
         let _ = gen_range(&mut r, 7u32..7u32);
+    }
+
+    /// `usize` sampling must be bit-identical to `u64` sampling — same
+    /// values AND same stream consumption — for every range expressible
+    /// on both pointer widths. This is what makes `shuffle` (which draws
+    /// `usize`) produce one permutation per seed on every target.
+    #[test]
+    fn usize_draws_identical_to_u64_draws() {
+        let mut r_usize = rng();
+        let mut r_u64 = rng();
+
+        let inclusive: [(u64, u64); 5] =
+            [(0, 51), (0, 1), (7, 1_007), (0, u32::MAX as u64), (3, 3)];
+        for &(lo, hi) in &inclusive {
+            let a = gen_range_inclusive(&mut r_usize, lo as usize..=hi as usize);
+            let b = gen_range_inclusive(&mut r_u64, lo..=hi);
+            assert_eq!(a as u64, b, "inclusive [{lo}, {hi}] diverged");
+        }
+
+        let exclusive: [(u64, u64); 2] = [(0, 52), (1, 1_000_000)];
+        for &(lo, hi) in &exclusive {
+            let a = gen_range(&mut r_usize, lo as usize..hi as usize);
+            let b = gen_range(&mut r_u64, lo..hi);
+            assert_eq!(a as u64, b, "exclusive [{lo}, {hi}) diverged");
+        }
+
+        // Identical residual streams prove identical byte consumption.
+        let mut tail_usize = [0u8; 32];
+        let mut tail_u64 = [0u8; 32];
+        r_usize.fill_bytes(&mut tail_usize);
+        r_u64.fill_bytes(&mut tail_u64);
+        assert_eq!(
+            tail_usize, tail_u64,
+            "usize path consumed a different number of stream bytes"
+        );
     }
 }

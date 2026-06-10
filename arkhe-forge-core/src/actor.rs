@@ -10,10 +10,15 @@ use core::marker::PhantomData;
 use arkhe_kernel::abi::{EntityId, Tick};
 use serde::{Deserialize, Serialize};
 
+use crate::action::{ActionCompute, ArkheAction as _};
 use crate::brand::{ShellBrand, ShellId};
-use crate::component::BoundedString;
+use crate::component::{ArkheComponent as _, BoundedString};
+use crate::context::{ensure_schema_version, ActionContext, ActionError};
 use crate::user::UserId;
+use crate::ArkheAction;
 use crate::ArkheComponent;
+// E14.L1-Deny enforcement on Action::compute.
+use crate::arkhe_pure;
 
 /// Opaque handle into the runtime Actor namespace.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
@@ -204,8 +209,74 @@ pub struct UserBinding {
     pub user_id: UserId,
 }
 
+/// Register a fresh `Actor` bound to an existing User — the production
+/// write that makes the GDPR admission gate
+/// ([`ActionContext::ensure_actor_eligible`]) live for this actor: the
+/// gate resolves actor → user through the [`UserBinding`] attached here,
+/// so an actor created without it has no resolvable user scope and the
+/// gate soft-passes it (system / anonymous actors).
+///
+/// Follows the spawn-then-set discipline of
+/// [`RegisterUser`](crate::user::RegisterUser): the actor entity is spawned
+/// first (the kernel ledger no-ops a `SetComponent` on a never-spawned
+/// entity), then `ActorProfile` (E-actor-1) and `UserBinding` (E-actor-2)
+/// are attached.
+///
+/// System-scoped with an explicit `user` target field: this action runs in
+/// the registration flow immediately after `RegisterUser`, when the actor
+/// credential does not exist yet — there is no authenticated actor to
+/// inject, so the integrator's registration path submits it as the system
+/// principal and names the freshly created user explicitly. A binding that
+/// names a never-registered user does not produce an ungateable actor: the
+/// admission gate fails closed on a resolved binding whose user has no
+/// `UserGdprState` ([`ActionError::UserLifecycleUnresolved`]).
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ArkheAction)]
+#[arkhe(type_code = 0x0001_0101, schema_version = 1, band = 1)]
+pub struct RegisterActor {
+    /// Wire-level schema version tag.
+    pub schema_version: u16,
+    /// Profile Component contents (E-actor-1 — exactly one per Actor).
+    pub profile: ActorProfile,
+    /// Backing user the new actor authenticates as (E-actor-2).
+    pub user: UserId,
+}
+
+impl ActionCompute for RegisterActor {
+    #[arkhe_pure]
+    fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Validate-then-copy: wire schema versions are checked against the
+        // canonical constants before any other gate, so a stale or forged
+        // version never reaches the stored profile.
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
+        ensure_schema_version(ActorProfile::SCHEMA_VERSION, self.profile.schema_version)?;
+
+        // E-actor-3 — `(shell_id, handle)` uniqueness. Soft-passes when no
+        // index is bound, matching the other L1 index-backed gates.
+        if ctx
+            .actor_by_handle(self.profile.shell_id, &self.profile.handle)
+            .is_some()
+        {
+            return Err(ActionError::ActorHandleCollision {
+                shell_id: self.profile.shell_id,
+                handle: self.profile.handle.clone(),
+            });
+        }
+
+        let actor_entity = ctx.spawn_entity_for::<ActorProfile>()?;
+        ctx.set_component(actor_entity, &self.profile)?;
+        ctx.set_component(
+            actor_entity,
+            &UserBinding {
+                schema_version: UserBinding::SCHEMA_VERSION,
+                user_id: self.user,
+            },
+        )?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::component::ArkheComponent;
@@ -251,5 +322,147 @@ mod tests {
     fn actor_profile_exposes_type_code_and_schema_version() {
         assert_eq!(ActorProfile::TYPE_CODE, 0x0003_0101);
         assert_eq!(ActorProfile::SCHEMA_VERSION, 1);
+    }
+
+    fn test_ctx() -> ActionContext<'static> {
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+        ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+    }
+
+    fn register_actor(v: u64) -> RegisterActor {
+        RegisterActor {
+            schema_version: 1,
+            profile: ActorProfile {
+                schema_version: 1,
+                shell_id: ShellId([0xAB; 16]),
+                handle: BoundedString::<32>::new("alice").unwrap(),
+                kind: ActorKind::Human,
+                created_tick: Tick(7),
+            },
+            user: UserId::new(ent(v)),
+        }
+    }
+
+    #[test]
+    fn register_actor_spawns_actor_then_sets_profile_and_binding() {
+        use arkhe_kernel::abi::TypeCode;
+        use arkhe_kernel::state::Op;
+
+        let mut c = test_ctx();
+        register_actor(7).compute(&mut c).expect("compute ok");
+        let ops = c.drain_ops();
+        assert_eq!(ops.len(), 3, "spawn + ActorProfile + UserBinding");
+
+        let Op::SpawnEntity { id: actor_id, .. } = &ops[0] else {
+            panic!("op 0 must spawn the actor entity, got {:?}", ops[0]);
+        };
+        match &ops[1] {
+            Op::SetComponent {
+                entity, type_code, ..
+            } => {
+                assert_eq!(entity, actor_id, "profile lands on the spawned actor");
+                assert_eq!(*type_code, TypeCode(ActorProfile::TYPE_CODE));
+            }
+            other => panic!("expected SetComponent(ActorProfile), got {:?}", other),
+        }
+        match &ops[2] {
+            Op::SetComponent {
+                entity,
+                type_code,
+                bytes,
+                ..
+            } => {
+                assert_eq!(entity, actor_id, "binding lands on the spawned actor");
+                assert_eq!(*type_code, TypeCode(UserBinding::TYPE_CODE));
+                let binding: UserBinding = postcard::from_bytes(bytes).unwrap();
+                assert_eq!(binding.user_id, UserId::new(ent(7)));
+            }
+            other => panic!("expected SetComponent(UserBinding), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn register_actor_rejects_handle_collision_via_index() {
+        use crate::context::ActorHandleIndex;
+
+        struct OneOccupant {
+            shell: ShellId,
+            handle: BoundedString<32>,
+            holder: ActorId,
+        }
+        impl ActorHandleIndex for OneOccupant {
+            fn lookup(&self, shell: ShellId, handle: &BoundedString<32>) -> Option<ActorId> {
+                (shell == self.shell && *handle == self.handle).then_some(self.holder)
+            }
+        }
+
+        let act = register_actor(7);
+        let index = OneOccupant {
+            shell: act.profile.shell_id,
+            handle: act.profile.handle.clone(),
+            holder: ActorId::new(ent(99)),
+        };
+        let mut c = test_ctx().with_actor_handle_index(&index);
+        let err = act
+            .compute(&mut c)
+            .expect_err("occupied handle must reject");
+        match err {
+            ActionError::ActorHandleCollision { shell_id, handle } => {
+                assert_eq!(shell_id, act.profile.shell_id);
+                assert_eq!(handle, act.profile.handle);
+            }
+            other => panic!("expected ActorHandleCollision, got {:?}", other),
+        }
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+    }
+
+    #[test]
+    fn register_actor_rejects_wire_schema_mismatch() {
+        let mut c = test_ctx();
+
+        let mut act = register_actor(7);
+        act.schema_version = 0xBEEF;
+        let err = act.compute(&mut c).expect_err("action field");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        let mut act = register_actor(7);
+        act.profile.schema_version = 0xBEEF;
+        let err = act.compute(&mut c).expect_err("profile field");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+    }
+
+    #[test]
+    fn register_actor_exposes_trait_consts() {
+        use crate::action::ArkheAction;
+        assert_eq!(RegisterActor::TYPE_CODE, 0x0001_0101);
+        assert_eq!(RegisterActor::SCHEMA_VERSION, 1);
+        assert_eq!(RegisterActor::BAND, 1);
+        const { assert!(!RegisterActor::IDEMPOTENT) };
     }
 }

@@ -16,4 +16,4 @@ pub mod arbitrary;
 pub mod shrink;
 
 /// Testkit semver.
-pub const TESTKIT_SEMVER: (u16, u16, u16) = (0, 14, 0);
+pub const TESTKIT_SEMVER: (u16, u16, u16) = (0, 15, 0);

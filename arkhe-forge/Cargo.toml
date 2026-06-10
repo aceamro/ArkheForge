@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "ArkheForge Runtime umbrella crate: re-exports arkhe-forge-core (L1 primitives) + arkhe-forge-platform (L2 services). Shell authors depend on this crate only; compliance-tier features proxy through to the platform crate."
@@ -14,8 +14,8 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-forge-core     = { path = "../arkhe-forge-core",     version = "0.14" }
-arkhe-forge-platform = { path = "../arkhe-forge-platform", version = "0.14" }
+arkhe-forge-core     = { path = "../arkhe-forge-core",     version = "0.15" }
+arkhe-forge-platform = { path = "../arkhe-forge-platform", version = "0.15" }
 
 [features]
 # Umbrella 가 platform feature 를 shell 에 proxy.

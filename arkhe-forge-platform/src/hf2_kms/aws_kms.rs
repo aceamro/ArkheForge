@@ -27,7 +27,7 @@ use aws_sdk_kms::{
 };
 use bytes::Bytes;
 use tokio::runtime::{Handle, Runtime};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use arkhe_forge_core::event::RuntimeSignatureClass;
 use arkhe_forge_core::pii::DekId;
@@ -162,13 +162,12 @@ impl KmsBackend for AwsKmsBackend {
                     plaintext_bytes.len()
                 )));
             }
-            let mut material = [0u8; 32];
-            material.copy_from_slice(&plaintext_bytes);
-
             // AWS returns a CiphertextBlob wrapped DEK too — the caller can
             // store it directly. We derive the DekId from a keyed digest of
             // the wrapped ciphertext so a rotation / re-wrap yields a fresh
             // id (idempotency contract upheld by DekShredAttestation).
+            // Extracted BEFORE the plaintext stack copy exists so no
+            // fallible operation sits between the copy and its scrub.
             let ciphertext = out.ciphertext_blob.ok_or(KmsError::UnwrapFailed)?;
             let id_digest = blake3::keyed_hash(
                 blake3::hash(b"arkhe-forge-aws-kms-dek-id").as_bytes(),
@@ -177,7 +176,14 @@ impl KmsBackend for AwsKmsBackend {
             let mut id_bytes = [0u8; 16];
             id_bytes.copy_from_slice(&id_digest.as_bytes()[..16]);
 
-            Ok((DekId(id_bytes), Dek::from_bytes(material)))
+            // `from_bytes` takes a bitwise copy ([u8; 32] is Copy), so wipe
+            // the local after the Dek is constructed — the zeroize-on-drop
+            // Dek is the only copy that outlives this scope.
+            let mut material = [0u8; 32];
+            material.copy_from_slice(&plaintext_bytes);
+            let dek = Dek::from_bytes(material);
+            material.zeroize();
+            Ok((DekId(id_bytes), dek))
         })
     }
 
@@ -222,7 +228,10 @@ impl KmsBackend for AwsKmsBackend {
             material.copy_from_slice(&bytes);
             // Unwrapped from durable KMS material — long-lived; admitted only
             // under AES-256-GCM-SIV (counter resets on each reconstruction).
-            Ok(Dek::from_unwrapped(material, DekConfig::default()))
+            // `from_unwrapped` copies the array, so wipe the local after.
+            let dek = Dek::from_unwrapped(material, DekConfig::default());
+            material.zeroize();
+            Ok(dek)
         })
     }
 

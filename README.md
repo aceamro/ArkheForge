@@ -34,9 +34,10 @@ let mut kernel = Kernel::new_with_wal_signed(
 kernel.register_action::<MyAction>();
 kernel.register_observer(Box::new(MyAuditObserver));
 
-// Submit + step — the WAL chain extends with a Hybrid PQC-signed record
-// and your observer fires post-fsync.
-kernel.submit(/* ... */).unwrap();
+// Submit + step — submit appends a Hybrid PQC-signed Submit record
+// (admission, under a capability ceiling) and step appends the Step
+// record (verdict + post-state digest); your observer fires post-fsync.
+kernel.submit(/* ..., CapabilityMask::SYSTEM, ... */).unwrap();
 let report = kernel.step(Tick(0), CapabilityMask::SYSTEM);
 ```
 
@@ -215,8 +216,8 @@ crates.io:
 
 ```toml
 [workspace.dependencies]
-arkhe-kernel = "0.14"
-arkhe-macros = "0.14"
+arkhe-kernel = "0.15"
+arkhe-macros = "0.15"
 ```
 
 No sibling repository checkout is required to build forge — `cargo build`
@@ -224,10 +225,11 @@ fetches both kernel crates from crates.io directly.
 
 ## Stability
 
-v0.14 tracks the ArkheKernel v0.14 epoch (`ml-dsa` 0.1.1 / NIST FIPS 204
-final). A new minor epoch is cut only on a substantive trigger; there is
-no churn between epochs. Version 1.0 is intentionally never reached
-(parity with ArkheKernel).
+v0.15 tracks the ArkheKernel v0.15 Canonical Input Log epoch (the WAL
+records exogenous inputs + per-step verdicts and re-derives every
+deterministic effect on replay). A new minor epoch is cut only on a
+substantive trigger; there is no churn between epochs. Version 1.0 is
+intentionally never reached (parity with ArkheKernel).
 
 ## Documentation
 

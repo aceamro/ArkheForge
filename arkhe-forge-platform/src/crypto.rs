@@ -34,7 +34,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::marker::PhantomData;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 // ===================== Dek =====================
 
@@ -493,7 +493,10 @@ impl<N: NonceSource> CryptoCoordinator<N> {
         dek_id: DekId,
     ) -> Result<EncryptedPii<T>, PiiError> {
         let aad = compute_aad(&dek_id, T::PII_CODE, self.manifest_cipher);
-        let pt_bytes = postcard::to_stdvec(plaintext).map_err(|_| PiiError::EncryptFailed)?;
+        // Zeroizing: the serialized plaintext is PII — scrub the heap
+        // buffer when it drops rather than leaving residue on freed pages.
+        let pt_bytes =
+            Zeroizing::new(postcard::to_stdvec(plaintext).map_err(|_| PiiError::EncryptFailed)?);
         let (nonce, ciphertext) = self.encrypt_raw(dek, &aad, &pt_bytes)?;
         Ok(EncryptedPii::new(
             dek_id,
@@ -538,7 +541,7 @@ impl<N: NonceSource> CryptoCoordinator<N> {
         &self,
         dek: &Dek,
         envelope: &EncryptedPii<T>,
-    ) -> Result<Vec<u8>, PiiError> {
+    ) -> Result<Zeroizing<Vec<u8>>, PiiError> {
         let aad = compute_aad(&envelope.dek_id, envelope.pii_code, envelope.aead_kind);
         self.decrypt_raw(
             dek,
@@ -563,6 +566,8 @@ impl<N: NonceSource> CryptoCoordinator<N> {
         }
     }
 
+    /// Decrypted output is PII plaintext — returned in a [`Zeroizing`]
+    /// wrapper so every internal consumer scrubs the heap buffer on drop.
     fn decrypt_raw(
         &self,
         dek: &Dek,
@@ -570,13 +575,14 @@ impl<N: NonceSource> CryptoCoordinator<N> {
         nonce: &NonceBytes,
         aad: &[u8; 19],
         ciphertext: &[u8],
-    ) -> Result<Vec<u8>, PiiError> {
+    ) -> Result<Zeroizing<Vec<u8>>, PiiError> {
         match kind {
             AeadKind::XChaCha20Poly1305 => self.decrypt_xchacha(dek, nonce, aad, ciphertext),
             AeadKind::Aes256Gcm => self.decrypt_aes_gcm(dek, nonce, aad, ciphertext),
             AeadKind::Aes256GcmSiv => self.decrypt_aes_gcm_siv(dek, nonce, aad, ciphertext),
             _ => Err(PiiError::UnsupportedAead),
         }
+        .map(Zeroizing::new)
     }
 
     // ----- XChaCha20-Poly1305 — tier-1-kms gated -----

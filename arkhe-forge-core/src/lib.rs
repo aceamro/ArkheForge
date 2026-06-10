@@ -48,7 +48,7 @@ pub use arkhe_forge_macros::{arkhe_pure, ArkheAction, ArkheComponent, ArkheEvent
 use arkhe_kernel::abi::{EntityId, InstanceId, Tick, TypeCode};
 
 /// ArkheForge Runtime semver triple — matches the repo release.
-pub const RUNTIME_SEMVER: (u16, u16, u16) = (0, 14, 0);
+pub const RUNTIME_SEMVER: (u16, u16, u16) = (0, 15, 0);
 
 /// Maximum retry count for zero-digest collision avoidance.
 pub const MAX_ID_DERIVE_RETRIES: u32 = 16;

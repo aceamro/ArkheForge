@@ -9,8 +9,9 @@
 use arkhe_kernel::abi::{EntityId, Tick};
 use serde::{Deserialize, Serialize};
 
-use crate::action::ActionCompute;
-use crate::context::{ActionContext, ActionError};
+use crate::action::{ActionCompute, ArkheAction as _};
+use crate::component::ArkheComponent as _;
+use crate::context::{ensure_schema_version, ActionContext, ActionError};
 use crate::event::UserErasureScheduled;
 use crate::ArkheAction;
 use crate::ArkheComponent;
@@ -120,10 +121,17 @@ pub struct UserProfile {
 /// [`crate::bridge`]) cannot read existing kernel state, so it cannot
 /// read-modify-write a bundled struct without clobbering its other fields.
 /// A standalone single-field component makes the transition a correct total
-/// write with no read. The admission gate
+/// write with no read. The blind write commits only for a SPAWNED user
+/// entity — the kernel ledger treats `SetComponent` on an unknown entity as
+/// a no-op — which `RegisterUser` guarantees (it spawns the user entity
+/// before seeding this component), so every registered user is reachable by
+/// the transition. The admission gate
 /// ([`ActionContext::ensure_actor_eligible`](crate::context::ActionContext::ensure_actor_eligible))
-/// reads THIS component; absence is treated as `Active` (a freshly registered
-/// user always carries one — `RegisterUser` seeds `Active`).
+/// reads THIS component; a resolved binding whose user lacks one fails
+/// closed
+/// ([`ActionError::UserLifecycleUnresolved`](crate::context::ActionError))
+/// — a freshly registered user always carries one (`RegisterUser` seeds
+/// `Active`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, ArkheComponent)]
 #[arkhe(type_code = 0x0003_0003, schema_version = 1)]
 pub struct UserGdprState {
@@ -220,6 +228,16 @@ pub struct GdprEraseUser {
 impl ActionCompute for RegisterUser {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Validate-then-copy: wire schema versions are checked against the
+        // canonical constants before any other gate, so a stale or forged
+        // version never reaches the stored components.
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
+        ensure_schema_version(UserProfile::SCHEMA_VERSION, self.profile.schema_version)?;
+        ensure_schema_version(
+            AuthCredential::SCHEMA_VERSION,
+            self.credential.schema_version,
+        )?;
+
         if !AuthCredential::validate_kdf_params(self.credential.kdf, &self.credential.kdf_params) {
             return Err(ActionError::InvalidInput("KDF params below minimum"));
         }
@@ -243,12 +261,20 @@ impl ActionCompute for RegisterUser {
 impl ActionCompute for GdprEraseUser {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
         // Transition the GDPR lifecycle pointer to `ErasurePending` with a
         // blind, total write of the standalone `UserGdprState` component — no
         // read required, so this works on the viewless dispatch path. This is
-        // what makes the E-user-3 C3 admission gate LIVE: from the instant
-        // erasure is requested, the gate (which reads `UserGdprState`) rejects
-        // any further actor-originated action by this user. The cascade
+        // half of what makes the E-user-3 C3 admission gate LIVE: from the
+        // instant erasure is requested, the gate (which reads `UserGdprState`)
+        // rejects any further action by an actor whose `UserBinding` (written
+        // by `RegisterActor`) names this user. The write commits
+        // because `RegisterUser` spawned the user entity (the kernel ledger
+        // no-ops a SetComponent on an unknown entity). An erase request for a
+        // never-registered user id no-ops — and an actor bound to such a user
+        // is not thereby ungateable: the gate fails closed on a resolved
+        // binding whose user has no `UserGdprState`
+        // (`ActionError::UserLifecycleUnresolved`). The cascade
         // observer still drives the actual DEK shred / PII tombstone off the
         // event below; the terminal `Erased` transition is a symmetric blind
         // write the integrator drives once the cascade reports completion.
@@ -363,5 +389,102 @@ mod tests {
         let b = postcard::to_stdvec(&s).unwrap();
         let back: GdprStatus = postcard::from_bytes(&b).unwrap();
         assert_eq!(s, back);
+    }
+
+    fn test_ctx() -> ActionContext<'static> {
+        use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal};
+        ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+    }
+
+    fn valid_register_user() -> RegisterUser {
+        RegisterUser {
+            schema_version: 1,
+            profile: UserProfile {
+                schema_version: 1,
+                created_tick: Tick(0),
+                primary_auth_kind: AuthKind::Passkey,
+            },
+            credential: AuthCredential {
+                schema_version: 1,
+                kind: AuthKind::Passkey,
+                kdf: KdfKind::Argon2id,
+                salt: [0u8; 16],
+                credential_hash: [0u8; 32],
+                kdf_params: KdfParams {
+                    m_cost: AuthCredential::MIN_ARGON2ID_M_COST,
+                    t_cost: AuthCredential::MIN_ARGON2ID_T_COST,
+                    p_cost: AuthCredential::MIN_ARGON2ID_P_COST,
+                },
+                expires_tick: None,
+                bound_tick: Tick(0),
+            },
+        }
+    }
+
+    fn assert_schema_mismatch(err: &ActionError) {
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 1,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn register_user_rejects_wire_schema_mismatch() {
+        let mut c = test_ctx();
+
+        // Action-level wire field — first check, fires before KDF validation.
+        let mut act = valid_register_user();
+        act.schema_version = 0xBEEF;
+        assert_schema_mismatch(&act.compute(&mut c).expect_err("action field"));
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Nested profile field — validated before the copy into storage.
+        let mut act = valid_register_user();
+        act.profile.schema_version = 0xBEEF;
+        assert_schema_mismatch(&act.compute(&mut c).expect_err("profile field"));
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Nested credential field — same gate.
+        let mut act = valid_register_user();
+        act.credential.schema_version = 0xBEEF;
+        assert_schema_mismatch(&act.compute(&mut c).expect_err("credential field"));
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        // Matching versions proceed.
+        valid_register_user()
+            .compute(&mut c)
+            .expect("matching versions → Ok");
+    }
+
+    #[test]
+    fn gdpr_erase_user_rejects_wire_schema_mismatch() {
+        let mut c = test_ctx();
+        let err = GdprEraseUser {
+            schema_version: 0xBEEF,
+            user: make_uid(42),
+        }
+        .compute(&mut c)
+        .expect_err("wire schema mismatch must reject");
+        assert_schema_mismatch(&err);
+        assert!(c.ops().is_empty(), "no Ops on rejection");
+
+        GdprEraseUser {
+            schema_version: 1,
+            user: make_uid(42),
+        }
+        .compute(&mut c)
+        .expect("matching version → Ok");
     }
 }

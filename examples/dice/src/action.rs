@@ -23,8 +23,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use arkhe_forge_core::action::ActionCompute;
-use arkhe_forge_core::context::{ActionContext, ActionError};
+use arkhe_forge_core::action::{ActionCompute, ArkheAction as _};
+use arkhe_forge_core::context::{ensure_schema_version, ActionContext, ActionError};
 use arkhe_forge_core::{arkhe_pure, ArkheAction, ArkheEvent};
 
 /// Domain tag for the server-side commitment hash. Mirrors the
@@ -53,8 +53,7 @@ pub const DOMAIN_DICE_CHAIN: &[u8] = b"arkhe-forge::dice::v1::chain::";
 pub struct RecordDiceRoll {
     /// Wire schema version. Must match the derive-macro literal —
     /// `compute()` rejects mismatches via `ActionError::SchemaMismatch`
-    /// (the kernel emits the field-level error before our body runs,
-    /// but a cheap belt-and-braces check pins the invariant locally).
+    /// as its first check, before any provably-fair binding is verified.
     pub schema_version: u16,
     /// 32-byte BLAKE3 commitment broadcast pre-roll: hash of
     /// `DOMAIN_DICE_COMMIT || server_seed`. Audience verifies the
@@ -111,6 +110,10 @@ pub struct DiceRollLanded {
 impl ActionCompute for RecordDiceRoll {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Stage 0 — wire schema gate. Fires before any provably-fair
+        // binding check so a stale wire shape never reaches Stage 1.
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
+
         // Stage 1 — server commitment binding.
         // BLAKE3 generic mode (`Hasher::new`) is correct here: the
         // commitment is a public binding, not key-derivation material;
@@ -166,5 +169,90 @@ impl ActionCompute for RecordDiceRoll {
             tick: ctx.tick().0,
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use arkhe_kernel::abi::{CapabilityMask, InstanceId, Principal, Tick};
+
+    fn test_ctx() -> ActionContext<'static> {
+        ActionContext::new(
+            [0u8; 32],
+            InstanceId::new(1).unwrap(),
+            Tick(7),
+            Principal::System,
+            CapabilityMask::SYSTEM,
+        )
+    }
+
+    /// Re-derive a fully valid roll from a fixed server seed so the only
+    /// variable under test is the wire `schema_version`.
+    fn valid_roll() -> RecordDiceRoll {
+        let server_seed = [0x42u8; 32];
+        let user_input = "lucky".to_owned();
+        let nonce = 3u64;
+
+        let mut h = blake3::Hasher::new();
+        h.update(DOMAIN_DICE_COMMIT);
+        h.update(&server_seed);
+        let commitment_server = *h.finalize().as_bytes();
+
+        let mut h = blake3::Hasher::new();
+        h.update(DOMAIN_DICE_COMBINED);
+        h.update(&server_seed);
+        h.update(user_input.as_bytes());
+        h.update(&nonce.to_le_bytes());
+        let combined_seed = *h.finalize().as_bytes();
+
+        let mut rng = arkhe_rand::RngSource::from_seed(&combined_seed);
+        let dice = [
+            arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
+            arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
+            arkhe_rand::gen_range_inclusive(&mut rng, 1u32..=6) as u8,
+        ];
+
+        RecordDiceRoll {
+            schema_version: 2,
+            commitment_server,
+            server_seed,
+            user_input,
+            nonce,
+            combined_seed,
+            dice,
+        }
+    }
+
+    #[test]
+    fn compute_accepts_matching_schema_version() {
+        let mut c = test_ctx();
+        valid_roll().compute(&mut c).expect("valid roll → Ok");
+        assert_eq!(c.events().len(), 1, "one DiceRollLanded emitted");
+    }
+
+    #[test]
+    fn compute_rejects_wire_schema_mismatch_before_bindings() {
+        let mut roll = valid_roll();
+        roll.schema_version = 0xBEEF;
+        // Corrupt the commitment too: the schema gate must fire FIRST, so
+        // the error is SchemaMismatch, not the Stage 1 commitment rejection.
+        roll.commitment_server = [0u8; 32];
+        let mut c = test_ctx();
+        let err = roll
+            .compute(&mut c)
+            .expect_err("wire schema mismatch must reject");
+        assert!(
+            matches!(
+                err,
+                ActionError::SchemaMismatch {
+                    expected: 2,
+                    got: 0xBEEF,
+                }
+            ),
+            "got {err:?}",
+        );
+        assert!(c.events().is_empty(), "no event on rejection");
     }
 }

@@ -22,7 +22,9 @@
 //! Five reject paths cover the framing surface:
 //!
 //! 1. **Unknown magic** at stream open → [`WalExportError::UnsupportedStreamVersion`].
-//!    Stack-only 8-byte read, no heap alloc pre-rejection (fail-fast).
+//!    Stack-only 8-byte read; no payload-sized allocation pre-rejection
+//!    (fail-fast — the fixed `BufReader` working buffer is the only
+//!    allocation, independent of stream contents).
 //! 2. **Truncated header** (fewer than 8 bytes) at open →
 //!    [`InvalidFramingReason::HeaderMissing`] via `Truncated` mapping.
 //! 3. **Length prefix exceeds bound** → [`InvalidFramingReason::LengthExceedsMax`]
@@ -43,7 +45,7 @@
 //! this reader API; this module hosts the production-grade equivalent
 //! for non-test callers.
 
-use std::io::{ErrorKind, Read};
+use std::io::{BufReader, ErrorKind, Read};
 
 use super::{InvalidFramingReason, StreamMagic, WalExportError, MAX_RECORD_BYTES};
 
@@ -84,9 +86,15 @@ pub trait WalStreamReader {
 /// - `StreamingWalReader<std::fs::File>` — on-disk archive reader
 /// - `StreamingWalReader<&[u8]>` — in-memory test fixture (the common
 ///   case in this module's own test suite)
+///
+/// The underlying reader is wrapped in a [`BufReader`], so the
+/// per-record framing reads (1-byte EOF probe + 7-byte length-prefix
+/// remainder) hit an in-memory buffer rather than issuing three raw
+/// `read` calls per record against the source — file-backed streams
+/// are efficient by construction, no caller-side wrapping needed.
 #[derive(Debug)]
 pub struct StreamingWalReader<R: Read> {
-    reader: R,
+    reader: BufReader<R>,
     /// Internal buffer reused across `next_record` calls. Sized up
     /// to fit each record's payload; capacity grows monotonically
     /// (no shrink) so steady-state throughput avoids reallocation
@@ -106,10 +114,13 @@ impl<R: Read> StreamingWalReader<R> {
     ///
     /// **Fail-fast posture**: the 8-byte header is read into a stack
     /// array; an unrecognised magic yields
-    /// [`WalExportError::UnsupportedStreamVersion`] with no heap
-    /// allocation pre-rejection. A truncated header (fewer than 8
-    /// bytes) yields [`InvalidFramingReason::HeaderMissing`].
-    pub fn open_v1(mut reader: R) -> Result<Self, WalExportError> {
+    /// [`WalExportError::UnsupportedStreamVersion`] with no
+    /// payload-sized allocation pre-rejection (the only allocation
+    /// before validation is the fixed-size `BufReader` working buffer,
+    /// independent of stream contents). A truncated header (fewer than
+    /// 8 bytes) yields [`InvalidFramingReason::HeaderMissing`].
+    pub fn open_v1(reader: R) -> Result<Self, WalExportError> {
+        let mut reader = BufReader::new(reader);
         let mut magic_bytes = [0u8; 8];
         match reader.read_exact(&mut magic_bytes) {
             Ok(()) => {}
@@ -214,22 +225,24 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// Build a synthetic record: postcard-encoded `seq: u64` followed
-    /// by `padding` zero bytes. Mirrors the `synth_record` helper in
-    /// `buffered_sink.rs` tests.
-    fn synth_record(seq: u64, padding: usize) -> Vec<u8> {
-        let mut bytes = postcard::to_stdvec(&seq).unwrap();
+    /// Build a synthetic record payload: a postcard-encoded marker
+    /// `u64` followed by `padding` zero bytes. The payload is opaque to
+    /// the sink (the seq is passed explicitly on append); the embedded
+    /// marker lets reader tests assert which record they decoded.
+    fn synth_record(marker: u64, padding: usize) -> Vec<u8> {
+        let mut bytes = postcard::to_stdvec(&marker).unwrap();
         bytes.extend(std::iter::repeat_n(0u8, padding));
         bytes
     }
 
     /// Encode `n` records via `BufferedWalSink<Vec<u8>>` and return the
-    /// flushed byte stream.
+    /// flushed byte stream. Record `i` carries marker `i` and is
+    /// appended under seq `i`.
     fn build_stream(n: u64) -> Vec<u8> {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
         for i in 0..n {
             let rec = synth_record(i, 4);
-            sink.append_record(&rec).expect("append OK");
+            sink.append_record(i, &rec).expect("append OK");
         }
         sink.flush().expect("flush OK");
         sink.into_writer_for_test()
@@ -312,27 +325,21 @@ mod tests {
         ));
     }
 
-    /// `next_record` on a stream with header but zero records returns
-    /// `Ok(None)` — clean EOF.
+    /// A record-less sink flush produces a header-only stream that the
+    /// reader opens and reads as zero records — the empty-WAL export
+    /// round-trip (firm requirement #3 on the writer side, clean EOF on
+    /// the reader side).
     #[test]
     fn next_record_after_header_only_returns_none_clean_eof() {
         let mut sink = BufferedWalSink::new(Vec::<u8>::new());
-        // No appends; flush also a no-op since header is emitted only on
-        // first append. So zero-record case = stream is just empty bytes.
         sink.flush().expect("flush OK");
         let stream = sink.into_writer_for_test();
-        // Without any records, the stream has 0 bytes (header is
-        // emitted only on first append). A reader cannot open it.
-        // Build a *header-only* stream by appending and then truncating
-        // back to the magic bytes.
-        if !stream.is_empty() {
-            // Defensive: should be empty in current sink semantics.
-            return;
-        }
-        // Construct header-only stream manually.
-        let mut hdr_only = Vec::new();
-        hdr_only.extend_from_slice(StreamMagic::V1.bytes());
-        let mut reader = StreamingWalReader::open_v1(Cursor::new(&hdr_only)).expect("open OK");
+        assert_eq!(
+            stream,
+            StreamMagic::V1.bytes().to_vec(),
+            "zero-append flush emits exactly the header magic"
+        );
+        let mut reader = StreamingWalReader::open_v1(Cursor::new(&stream)).expect("open OK");
         assert!(matches!(reader.next_record(), Ok(None)));
         assert_eq!(reader.cumulative_position(), 8);
     }

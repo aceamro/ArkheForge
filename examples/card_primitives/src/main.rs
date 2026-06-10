@@ -257,9 +257,10 @@ fn main() {
     // Stage 6 ran the L1 event-only pipeline. Stage 7 drives the same
     // Action through the L2 service layer: the `RuntimeService` wraps
     // an `arkhe_kernel::Kernel`, registers the Action, schedules a
-    // submission, and steps the kernel once. The kernel's authorize →
-    // dispatch → WAL append loop runs internally; the `StepReport`
-    // confirms the action executed end-to-end.
+    // submission (appending a WAL Submit record), and steps the kernel
+    // once (appending a Step record with the verdict + post-state
+    // digest). The `StepReport` confirms the action executed
+    // end-to-end.
     println!("[7/9] ArkheForge L2 RuntimeService dispatch:");
 
     let world_id = [0x11u8; 32];
@@ -301,7 +302,11 @@ fn main() {
     println!("[8/9] WAL export → BufferedWalSink:");
 
     let wal = service.export_wal().expect("WAL is configured");
-    assert_eq!(wal.records.len(), 1, "one dispatch → one WAL record");
+    assert_eq!(
+        wal.records.len(),
+        2,
+        "one dispatch → one Submit + Step record pair"
+    );
     let chain_tip = wal
         .records
         .last()

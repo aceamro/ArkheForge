@@ -8,6 +8,7 @@ use std::fs::File;
 use std::path::Path;
 
 use arkhe_forge_platform::wal_export::{StreamingWalReader, WalStreamReader};
+use arkhe_kernel::persist::WalRecordContent;
 use arkhe_kernel::WalRecord;
 
 use crate::action::RecordDiceRoll;
@@ -19,7 +20,8 @@ use crate::action::RecordDiceRoll;
 /// stored here.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
-    /// Recorded Action payload (deserialized from `WalRecord.action_bytes`).
+    /// Recorded Action payload (deserialized from
+    /// `WalRecordContent::Submit::action_bytes`).
     pub record: RecordDiceRoll,
 }
 
@@ -38,7 +40,8 @@ pub enum HistoryLoadError {
     #[error("WAL framing: {0}")]
     Framing(#[from] arkhe_forge_platform::wal_export::WalExportError),
     /// Postcard rejected the framed payload (kernel `WalRecord` shape
-    /// mismatch — should never fire under the wire pin).
+    /// mismatch — fires for streams from a different wire epoch, e.g.
+    /// a pre-0.15 `dice.wal`; `--reset` clears the file).
     #[error("WAL record decode: {0}")]
     WalRecordDecode(postcard::Error),
     /// Postcard rejected the embedded Action bytes (wire-shape skew
@@ -72,14 +75,24 @@ pub fn load_history(path: &Path) -> Result<Vec<HistoryEntry>, HistoryLoadError> 
     while let Some(payload) = reader.next_record()? {
         let wal_record: WalRecord =
             postcard::from_bytes(payload).map_err(HistoryLoadError::WalRecordDecode)?;
-        if wal_record.action_type_code.0 != RECORD_DICE_ROLL_TYPE_CODE {
+        // Action payloads live on Submit records only — Step records
+        // carry the verdict + post-state digest, never action bytes.
+        let WalRecordContent::Submit {
+            action_type_code,
+            action_bytes,
+            ..
+        } = &wal_record.content
+        else {
+            continue;
+        };
+        if action_type_code.0 != RECORD_DICE_ROLL_TYPE_CODE {
             // Forward-compatibility: skip any non-dice record without
             // failing the load. Today there are none; tomorrow a
             // co-tenant might appear.
             continue;
         }
-        let record: RecordDiceRoll = postcard::from_bytes(&wal_record.action_bytes)
-            .map_err(HistoryLoadError::ActionDecode)?;
+        let record: RecordDiceRoll =
+            postcard::from_bytes(action_bytes).map_err(HistoryLoadError::ActionDecode)?;
         out.push(HistoryEntry { record });
     }
     Ok(out)

@@ -38,16 +38,20 @@ spec, audited via the workspace `supply-chain/audits.toml` entry.
 ## Cross-platform determinism
 
 Byte-to-integer conversions use explicit little-endian (`from_le_bytes`)
-regardless of host endianness, so the same seed produces byte-identical
-streams on x86_64 / aarch64 / wasm32. Two enforcement layers:
+regardless of host endianness, and `usize` sampling routes through the
+u64 Lemire path on every pointer width, so the same seed yields
+identical values and identical stream consumption across targets.
+Three enforcement layers:
 
 - **Golden-vector fixture** at `tests/golden/proof_rng_canonical_seq_v1.bin`
   (4 KiB). Version-pinned reproducibility anchor — byte-compared in
-  `tests/golden_vector.rs`. CI re-runs this test under
-  `--target {x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, wasm32-unknown-unknown}`.
-- **Repository self-grep** that forbids native-endian conversion
-  helpers in `arkhe-rand/src/` — expected 0 hits, run as part of the
-  workflow-3 step 9.5 PCRE gate.
+  `tests/golden_vector.rs` on every CI run, alongside a pinned
+  52-element shuffle golden permutation.
+- **CI self-grep** rejecting `from_ne_bytes` / `to_ne_bytes` under
+  `arkhe-rand/src/` — zero hits required.
+- **Pointer-width independence by construction** — `usize` draws are
+  u64 draws; the identity test in `src/range.rs` asserts `usize` and
+  `u64` sampling agree bit-for-bit in values and stream consumption.
 
 To regenerate the golden vector after a KDF context rotation:
 
@@ -67,7 +71,7 @@ ARKHE_RAND_REGEN_GOLDEN=1 cargo test -p arkhe-rand --test golden_vector
 - `#![forbid(unsafe_code)]` — strictly stronger than `deny`. Audit
   surface is safe-Rust only.
 - `Zeroize` + `ZeroizeOnDrop` — seed bytes are wiped on drop.
-- Version tracks the ArkheKernel epoch — currently `0.14`.
+- Version tracks the ArkheKernel epoch — currently `0.15`.
 
 ## License
 

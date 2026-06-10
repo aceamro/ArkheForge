@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-runtime-testkit"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "Property-based testing harness for ArkheForge Runtime: proptest Arbitrary implementations + scope-based shrinker for ShellId / TypeCode / Tick / EntityId."
@@ -14,8 +14,8 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-kernel        = "0.14"
-arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.14" }
+arkhe-kernel        = "0.15"
+arkhe-forge-core    = { path = "../arkhe-forge-core", version = "0.15" }
 proptest            = { workspace = true }
 
 [lints]

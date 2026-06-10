@@ -22,18 +22,24 @@
 //! deliberately absent from the trait surface** — external callers
 //! cannot invoke them through the trait, and the L0 A14 append-only
 //! invariant is projected into the L2 export layer **without touching
-//! L0 source** (DO NOT TOUCH #7 preserved). Concrete implementations
-//! MAY add private internal positioning helpers but MUST NOT expose
-//! them on the public surface.
+//! L0 source**. Concrete implementations MAY add private internal
+//! positioning helpers but MUST NOT expose them on the public surface.
+//!
+//! The caller passes each record's kind-agnostic monotonic `seq`
+//! explicitly (production callers read it through the typed
+//! `arkhe_kernel::WalRecord::seq()` accessor); the sink enforces strict
+//! `+1` succession and never parses the payload bytes itself.
 //!
 //! # DO NOT TOUCH #7 (postcard field order) invariant
 //!
 //! The streaming format wraps **unmodified L0 record bytes**. The
 //! length-prefix + stream-header framing wraps the protected payload
-//! from the outside; postcard field order inside each record is
-//! preserved bit-exact. The wire-stability tests verify this by
-//! comparing streamed record bytes against
-//! `arkhe_kernel::persist::Wal::serialize` record bytes.
+//! from the outside; the kernel's frozen record layout (the
+//! kind-discriminated `Submit`/`Step` content and its per-variant field
+//! order — L0 Layer A item 7) passes through bit-exact. This framing
+//! layer is payload-agnostic by design: the only coupling to the L0
+//! schema is the typed `WalRecord::seq()` call at the producer call
+//! site, which the compiler — not a byte-offset assumption — checks.
 //!
 //! # Forward-compatibility
 //!
@@ -168,8 +174,8 @@ pub enum WalExportError {
     /// [`InvalidFramingReason`] for the specific malformation.
     InvalidFraming(InvalidFramingReason),
     /// Append-only invariant violated — caller attempted to submit a
-    /// record whose `seq` is not the strict successor of the most
-    /// recently appended record's `seq`. Surface enforcement: the
+    /// record whose declared `seq` is not the strict successor of the
+    /// most recently appended record's `seq`. Surface enforcement: the
     /// type-level invariant (no seek / truncate / rewrite methods)
     /// prevents the *machinery* from rewriting, and this runtime-side
     /// check prevents the *caller* from re-ordering.
@@ -231,7 +237,8 @@ pub enum WalExportError {
     },
     /// Internal buffer capacity exhausted before flush. Caller should
     /// flush to drain. Concrete sink implementations choose their own
-    /// `capacity` — [`BufferedWalSink`] uses a 16 MiB default and
+    /// `capacity` — [`BufferedWalSink`] defaults to [`MAX_RECORD_BYTES`]
+    /// plus the 16-byte framing overhead and
     /// exposes configuration knobs through the constructor.
     BufferOverflow {
         /// Sink's configured buffer capacity in bytes.
@@ -400,18 +407,22 @@ impl From<std::io::Error> for WalExportError {
 /// implementation [`BufferedWalSink`] is `Send` but `!Sync` (uses an
 /// internal `&mut` cursor into the buffer).
 pub trait WalRecordSink {
-    /// Append one record's encoded bytes to the sink. The implementation
-    /// frames the bytes (length prefix + payload) and records them in
-    /// append order. Callers MUST submit records in monotone-increasing
-    /// `seq` order; out-of-order submissions trip
-    /// [`WalExportError::AppendOnlyViolation`].
+    /// Append one record's encoded bytes to the sink under its declared
+    /// monotonic `seq`. The implementation frames the bytes (length
+    /// prefix + payload) and records them in append order. Callers MUST
+    /// submit records in strict `+1` `seq` order; out-of-order
+    /// submissions trip [`WalExportError::AppendOnlyViolation`].
     ///
-    /// The bytes parameter SHOULD be the postcard encoding of an L0
-    /// `WalRecord`. The wire-stability test
-    /// `postcard_record_bytes_preserved_bit_exact` verifies that
-    /// streamed bytes match `Wal::serialize` record-section bytes
-    /// without any field-order rewrite (DO NOT TOUCH #7).
-    fn append_record(&mut self, record_bytes: &[u8]) -> Result<(), WalExportError>;
+    /// `seq` is the record's kind-agnostic monotonic sequence —
+    /// production callers read it from the typed
+    /// `arkhe_kernel::WalRecord::seq()` accessor, so the L0 schema
+    /// coupling is compiler-checked rather than parsed out of the
+    /// payload. The bytes parameter SHOULD be the postcard encoding of
+    /// an L0 `WalRecord`; the sink treats it as opaque. The
+    /// wire-stability test `postcard_record_bytes_preserved_bit_exact`
+    /// verifies that streamed bytes pass through without any rewrite
+    /// (DO NOT TOUCH #7 projection).
+    fn append_record(&mut self, seq: u64, record_bytes: &[u8]) -> Result<(), WalExportError>;
 
     /// Flush buffered records to the underlying durable storage.
     /// Returns `Ok(())` once the implementation's durability contract
@@ -627,7 +638,7 @@ mod tests {
     struct NoopSink;
 
     impl WalRecordSink for NoopSink {
-        fn append_record(&mut self, _record_bytes: &[u8]) -> Result<(), WalExportError> {
+        fn append_record(&mut self, _seq: u64, _record_bytes: &[u8]) -> Result<(), WalExportError> {
             Ok(())
         }
         fn flush(&mut self) -> Result<(), WalExportError> {
@@ -642,7 +653,8 @@ mod tests {
     #[test]
     fn wal_record_sink_satisfiable_without_seek() {
         let mut sink = NoopSink;
-        sink.append_record(b"sample").expect("noop sink succeeds");
+        sink.append_record(1, b"sample")
+            .expect("noop sink succeeds");
         sink.flush().expect("noop flush");
     }
 }

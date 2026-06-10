@@ -1,6 +1,6 @@
 [package]
 name          = "arkhe-forge-core"
-version       = "0.14.1"
+version       = "0.15.0"
 edition       = "2021"
 rust-version.workspace = true
 description   = "L1 primitives for ArkheForge Runtime: Core 5 (User / Actor / Space / Entry / Activity) + ShellBrand invariant-lifetime isolation + deterministic entity-id derivation. Pure compute, no I/O."
@@ -14,9 +14,9 @@ readme        = "README.md"
 authors       = ["Arkhe Contributors"]
 
 [dependencies]
-arkhe-kernel        = "0.14"
-arkhe-macros        = "0.14"
-arkhe-forge-macros  = { path = "../arkhe-forge-macros", version = "0.14" }
+arkhe-kernel        = "0.15"
+arkhe-macros        = "0.15"
+arkhe-forge-macros  = { path = "../arkhe-forge-macros", version = "0.15" }
 serde               = { workspace = true }
 postcard            = { workspace = true }
 blake3              = { workspace = true }

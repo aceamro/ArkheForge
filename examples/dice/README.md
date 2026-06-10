@@ -54,7 +54,7 @@ history + per-stage performance timings print to stdout:
 ```
 
 The `#` column is a 1-indexed display counter; in the single-instance
-dice example the kernel `tick` for each record equals its `#`, so the
+dice example the kernel `tick` for each roll equals its `#`, so the
 row header omits it to avoid duplicating the same number twice. The
 tick remains in the schema (`DiceRollLanded.tick`) and surfaces in
 the live `[5/5]` banner for replay-audit purposes. Each record is
@@ -70,22 +70,24 @@ per second" estimate after the history block:
 --- Performance ---
 
   Stage timings (this run):
-    [1] server commit:        92 μs
+    [1] server commit:        506 μs
     [2] user input (stdin):   N/A (interactive blocking)
-    [3] combined seed:        8 μs
-    [4] roll 3D6:             33 μs
-    [5] verify + dispatch:    436 μs
-    [6] WAL write + flush:    214 μs
-    Total compute (excl. stdin): 785 μs
-    Throughput equivalent:    ~1273 rolls/sec (excl. stdin)
+    [3] combined seed:        18 μs
+    [4] roll 3D6:             66 μs
+    [5] verify + dispatch:    1.2 ms
+    [6] WAL write + flush:    390 μs
+    Total compute (excl. stdin): 2.2 ms
+    Throughput equivalent:    ~453 rolls/sec (excl. stdin)
 
-WAL: 2 record(s), 518 bytes (dice.wal)
+WAL: 1 roll(s), 315 bytes (dice.wal)
 ```
 
 `Instant` readings are display-only — they never feed back into the
 compute path, so replay determinism is unaffected. Stage 5 cost grows
-with history length (each prior record is re-dispatched on every
-launch); stage 6 cost grows with WAL byte size.
+with history length (each prior roll is re-dispatched on every
+launch); stage 6 cost grows with WAL byte size. On disk, each roll is
+a `Submit` + `Step` record pair (the kernel's Canonical Input Log
+shape), so the WAL holds twice as many records as rolls.
 
 ## Reset
 
@@ -94,7 +96,9 @@ cargo run -p dice -- --reset
 ```
 
 Deletes `examples/dice/dice.wal` (no-op if absent). The next launch
-starts with an empty history.
+starts with an empty history. A `dice.wal` written by a different
+kernel wire epoch (e.g. pre-0.15) fails to decode on load — `--reset`
+clears it.
 
 ## Verify
 
@@ -102,9 +106,11 @@ starts with an empty history.
 cargo run -p dice -- --verify
 ```
 
-Reads every record from `dice.wal`, re-dispatches them through a fresh
-`RuntimeService`, exports the resulting WAL back into a buffer, and
-asserts byte-equality against the on-disk file. A mismatch exits with
+Reads every roll from `dice.wal` (the `Submit` records carry the
+action payloads; `Step` records are verdict envelopes and are skipped
+by the loader), re-dispatches them through a fresh `RuntimeService`,
+exports the resulting WAL back into a buffer, and asserts
+byte-equality against the on-disk file. A mismatch exits with
 status 1; the chain-hash invariant catches in-record tampering during
 the per-record dispatch (Stage 2 verify), and the byte-equality check
 catches framing-layer tampering.

@@ -19,17 +19,20 @@
 //! forge-core does not import forge-platform, so the cross-crate
 //! reference is by name only). The L2 layer wraps a
 //! [`Kernel`](arkhe_kernel::Kernel) and drives the kernel's
-//! authorize → dispatch → WAL append loop via the forge → kernel
+//! submit (WAL `Submit` record) → step (authorize → dispatch + WAL
+//! `Step` record) loop via the forge → kernel
 //! [`bridge`](crate::bridge) emitted by `#[derive(ArkheAction)]`.
 //!
 //! ## Authorization
 //!
 //! The L1 capability gate (see the private `ensure_caps` helper)
 //! requires the caller's capability mask to be non-empty. This is
-//! the L1 surface's only authorization gate; the kernel's `step()`
-//! re-authorizes every drained `Op` against the same caps in the L2
-//! path, so the L1 rejection is an early-out optimisation rather
-//! than the security boundary.
+//! the L1 surface's only authorization gate; on the L2 path the
+//! kernel authorizes every drained `Op` against
+//! `effective_caps(default_caps, principal, ceiling)` intersected
+//! with the operator session ceiling — uniformly for `System` and
+//! `External` principals — so the L1 rejection is an early-out
+//! optimisation rather than the security boundary.
 //!
 //! ## Idempotency
 //!
@@ -61,8 +64,9 @@ where
 }
 
 /// Authorization gate — requires the caller's capability mask to be
-/// non-empty. The kernel re-authorizes every drained `Op` against the
-/// same caps in `Kernel::step` (L2 path), so this gate is an early-out
+/// non-empty. On the L2 path the kernel authorizes every drained `Op`
+/// against `effective_caps(default_caps, principal, ceiling)` ∩
+/// session ceiling in `Kernel::step`, so this gate is an early-out
 /// optimisation rather than the security boundary; manifest-driven
 /// role-to-caps mapping is an L2 service layer concern (see
 /// `arkhe-forge-platform`).

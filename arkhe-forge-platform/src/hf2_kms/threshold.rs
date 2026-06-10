@@ -237,6 +237,12 @@ pub fn combine_shares(
     shares: &[Share],
     config: ThresholdConfig,
 ) -> Result<Vec<u8>, ThresholdError> {
+    if !config.is_valid() {
+        return Err(ThresholdError::InvalidConfig {
+            t: config.t,
+            n: config.n,
+        });
+    }
     if shares.len() < config.t as usize {
         return Err(ThresholdError::InsufficientShares {
             need: config.t as usize,
@@ -328,6 +334,15 @@ mod tests {
     fn split_invalid_config_errors() {
         let err = split_secret(b"secret", ThresholdConfig { t: 1, n: 3 }).unwrap_err();
         assert!(matches!(err, ThresholdError::InvalidConfig { .. }));
+    }
+
+    /// An invalid config rejects up front — `t = 0` with an empty share
+    /// set previously fell past the insufficient-shares guard
+    /// (`0 < 0 == false`) into an out-of-bounds index panic.
+    #[test]
+    fn combine_invalid_config_errors() {
+        let err = combine_shares(&[], ThresholdConfig { t: 0, n: 0 }).unwrap_err();
+        assert!(matches!(err, ThresholdError::InvalidConfig { t: 0, n: 0 }));
     }
 
     #[test]

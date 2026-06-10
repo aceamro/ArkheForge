@@ -65,17 +65,36 @@ impl ProcessProtection for LinuxProcessProtection {
         // hard error so callers cannot misread `.is_ok()` as "no
         // debugger" — `disable_ptrace` would otherwise return Ok
         // even with an attacker process holding ptrace control.
-        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
-                if let Some(rest) = line.strip_prefix("TracerPid:") {
-                    if rest.trim() != "0" {
-                        return Err(ProtectionError::DebuggerAttached(
-                            "TracerPid != 0 in /proc/self/status",
-                        ));
-                    }
-                    break;
-                }
+        // Fail closed when the probe itself is unreadable (hidepid=2
+        // procfs, sandbox mount masking): an Ok return GUARANTEES no
+        // tracer was attached at call time, so an unknown tracer state
+        // must be an error, not a silent pass.
+        let status = std::fs::read_to_string("/proc/self/status").map_err(|e| {
+            ProtectionError::SyscallFailed {
+                op: "read(/proc/self/status)",
+                code: e.raw_os_error().unwrap_or(0),
             }
+        })?;
+        let mut tracer_line_seen = false;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("TracerPid:") {
+                if rest.trim() != "0" {
+                    return Err(ProtectionError::DebuggerAttached(
+                        "TracerPid != 0 in /proc/self/status",
+                    ));
+                }
+                tracer_line_seen = true;
+                break;
+            }
+        }
+        // A status file without a TracerPid line (field-restricted procfs)
+        // leaves the tracer state unknown — fail closed, same as an
+        // unreadable probe.
+        if !tracer_line_seen {
+            return Err(ProtectionError::SyscallFailed {
+                op: "parse(/proc/self/status TracerPid)",
+                code: 0,
+            });
         }
 
         // SAFETY: `prctl(PR_SET_PTRACER, 0, ...)` sets the process-wide
@@ -169,13 +188,21 @@ mod tests {
         // m6 — disable_ptrace must surface `DebuggerAttached` rather
         // than silently returning Ok when a tracer is present.
         // Outside a debugger the call returns Ok; the variant exists
-        // so callers can fail-close on attach.
+        // so callers can fail-close on attach. A SyscallFailed may
+        // carry the prctl op, the fail-closed status-read op, or the
+        // fail-closed TracerPid-parse op (masked / field-restricted
+        // procfs environments).
         let proto = LinuxProcessProtection;
         match proto.disable_ptrace() {
             Ok(()) => {}
             Err(ProtectionError::DebuggerAttached(_)) => {}
             Err(ProtectionError::SyscallFailed { op, .. }) => {
-                assert_eq!(op, "prctl(PR_SET_PTRACER)");
+                assert!(
+                    op == "prctl(PR_SET_PTRACER)"
+                        || op == "read(/proc/self/status)"
+                        || op == "parse(/proc/self/status TracerPid)",
+                    "unexpected SyscallFailed op: {op}"
+                );
             }
             Err(other) => panic!("unexpected error variant: {other:?}"),
         }

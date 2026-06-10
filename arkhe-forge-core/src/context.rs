@@ -19,9 +19,11 @@
 //! [`crate::bridge::kernel_compute`], which reconstructs a fresh
 //! `ActionContext` from the kernel's read-only context view, runs the
 //! forge `compute()` body, and returns the drained `Vec<Op>` to the
-//! kernel. The kernel performs authorize → dispatch → WAL append on
-//! its own internal `Effect<'i, _>` lifecycle (the `Effect` constructor
-//! and `authorize` function are kernel-private, by design).
+//! kernel. The kernel performs authorize → dispatch on its own
+//! internal `Effect<'i, _>` lifecycle and appends a WAL `Step` record
+//! (verdict + post-state digest) per pop — the `Submit` record was
+//! already appended at admission (the `Effect` constructor and
+//! `authorize` function are kernel-private, by design).
 //!
 //! ## `'i` brand
 //!
@@ -131,6 +133,19 @@ pub enum ActionError {
         scheduled_tick: Tick,
     },
 
+    /// E-user-3 C3 — the actor's `UserBinding` resolves to a user with no
+    /// `UserGdprState` lifecycle pointer (an unregistered or incompletely
+    /// registered target). Fail closed: every `RegisterUser`-registered
+    /// user carries the pointer, so a resolved binding that cannot reach
+    /// one must not act — otherwise an actor bound to a never-registered
+    /// user id would be permanently ungateable (its erasure request would
+    /// no-op against the never-spawned user entity).
+    #[error("user bound without GDPR lifecycle state: {user:?}")]
+    UserLifecycleUnresolved {
+        /// Bound user that has no reachable `UserGdprState`.
+        user: UserId,
+    },
+
     /// E-act-7 — an Action attempted to overwrite an entity's existing
     /// `EntityShellId` with a different shell. The runtime refuses the
     /// reassignment to defend against type-erased-id brand bypass (spec
@@ -157,8 +172,31 @@ pub enum ActionError {
     },
 }
 
+/// Validate a wire-supplied `schema_version` field against the type's
+/// canonical schema-version constant.
+///
+/// Every production `compute()` body runs this as its first check, once for
+/// the action's own `schema_version` and once per nested draft / payload
+/// `schema_version` — validate-then-copy, so a stale or forged wire version
+/// is rejected loudly instead of being persisted verbatim into stored
+/// components.
+///
+/// # Errors
+///
+/// Returns [`ActionError::SchemaMismatch`] when `got != expected`.
+pub fn ensure_schema_version(expected: u16, got: u16) -> Result<(), ActionError> {
+    if got == expected {
+        Ok(())
+    } else {
+        Err(ActionError::SchemaMismatch { expected, got })
+    }
+}
+
 /// Deterministic event record — what `emit_event` accumulates per tick
-/// before the pipeline drains them into the WAL `Op::EmitEvent` stream.
+/// before the pipeline drains them into the L0 `Op::EmitEvent` stream
+/// (events are re-derived on replay, not WAL-persisted; chain coverage
+/// is indirect via the `Submit` record's action bytes + deterministic
+/// re-execution).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EventRecord {
     /// Event TypeCode (runtime registry pin).
@@ -537,9 +575,9 @@ impl<'i> ActionContext<'i> {
 
     /// Resolve the GDPR status of `user` via the staged-aware
     /// [`UserGdprState`] read. Returns `Ok(None)` when no lifecycle pointer
-    /// is reachable; the compute caller decides whether that is a soft pass
-    /// (Tier-0 / pre-Bootstrap dev, or a user registered before the pointer
-    /// existed — treated as `Active`) or a hard reject.
+    /// is reachable; [`ActionContext::ensure_actor_eligible`] treats that
+    /// as a hard reject for a resolved binding (registration always seeds
+    /// the pointer), while viewless contexts never reach this read.
     pub fn user_gdpr_status(&self, user: UserId) -> Result<Option<GdprStatus>, ActionError> {
         let state = self.staged_read::<UserGdprState>(user.get())?;
         Ok(state.map(|s| s.status))
@@ -547,9 +585,13 @@ impl<'i> ActionContext<'i> {
 
     /// E-user-3 C3 helper — fail an actor-originated compute when the
     /// actor's backing user is in an erasure-lifecycle state
-    /// (`GdprStatus::ErasurePending` or the terminal `Erased`). `Ok(None)`
-    /// from the underlying reads (no view bound, anonymous actor, etc.)
-    /// is treated as a soft pass.
+    /// (`GdprStatus::ErasurePending` or the terminal `Erased`). An
+    /// unresolved BINDING (no view bound, anonymous actor) is a soft pass
+    /// — the actor has no user scope to gate. A RESOLVED binding whose
+    /// user has no [`UserGdprState`] fails closed
+    /// ([`ActionError::UserLifecycleUnresolved`]): registration always
+    /// seeds the pointer, so its absence means an unregistered binding
+    /// target that erasure could never gate.
     ///
     /// The soft pass means this check is only effective when a view is
     /// bound. Two paths bind one:
@@ -568,11 +610,16 @@ impl<'i> ActionContext<'i> {
     ///   check on that injected actor BEFORE `submit`, rejecting an
     ///   erasure-pending action before it reaches the WAL. The actor this
     ///   gate evaluates is therefore the authenticated caller, never a
-    ///   trusted-by-default wire field — the gate is sound. It is also live:
-    ///   [`GdprEraseUser`](crate::user::GdprEraseUser) transitions the user's
-    ///   [`UserGdprState`] to `ErasurePending` (a blind write, valid on the
-    ///   viewless path), so from the instant erasure is requested this gate
-    ///   rejects the user's subsequent actor-originated actions.
+    ///   trusted-by-default wire field — the gate is sound. Its liveness
+    ///   rests on two production writes: the actor → user [`UserBinding`]
+    ///   attached by [`RegisterActor`](crate::actor::RegisterActor) at
+    ///   registration time (an actor with no binding has no resolvable user
+    ///   scope, so the gate soft-passes it — system / anonymous actors), and
+    ///   the [`GdprEraseUser`](crate::user::GdprEraseUser) transition of the
+    ///   user's [`UserGdprState`] to `ErasurePending` (a blind write, valid
+    ///   on the viewless path). For an actor registered through
+    ///   `RegisterActor`, the gate rejects from the instant erasure is
+    ///   requested.
     pub fn ensure_actor_eligible(
         &self,
         actor: ActorId,
@@ -581,21 +628,25 @@ impl<'i> ActionContext<'i> {
         let Some(user) = self.authenticated_actor_user(actor)? else {
             return Ok(());
         };
-        // Only an `Active` user (or one with no lifecycle pointer yet — see
-        // `user_gdpr_status`) may act. Any erasure-lifecycle state blocks:
-        // `ErasurePending` (erasure requested) AND the terminal `Erased`
-        // (crypto-erasure completed) — a user whose data is being or has been
-        // shredded must not originate further actions. Fail closed; a future
-        // `GdprStatus` variant forces an explicit decision here at compile
-        // time rather than silently soft-passing.
+        // Only an `Active` user may act. Any erasure-lifecycle state
+        // blocks: `ErasurePending` (erasure requested) AND the terminal
+        // `Erased` (crypto-erasure completed) — a user whose data is being
+        // or has been shredded must not originate further actions. A
+        // RESOLVED binding whose user has no lifecycle pointer also fails
+        // closed: `RegisterUser` always seeds one, so its absence means an
+        // unregistered binding target whose erasure could never arm the
+        // gate. Fail closed; a future `GdprStatus` variant forces an
+        // explicit decision here at compile time rather than silently
+        // soft-passing.
         match self.user_gdpr_status(user)? {
-            None | Some(GdprStatus::Active) => Ok(()),
+            Some(GdprStatus::Active) => Ok(()),
             Some(GdprStatus::ErasurePending | GdprStatus::Erased) => {
                 Err(ActionError::UserErasurePending {
                     user,
                     scheduled_tick,
                 })
             }
+            None => Err(ActionError::UserLifecycleUnresolved { user }),
         }
     }
 
@@ -618,7 +669,8 @@ impl<'i> ActionContext<'i> {
     }
 
     /// Drain accumulated events. Called by the pipeline after `compute()`
-    /// returns so the WAL append path can stream them in sequence order.
+    /// returns so the L1 event consumer (projection observer / L2 event
+    /// sink) receives them in sequence order.
     pub fn drain_events(&mut self) -> Vec<EventRecord> {
         core::mem::take(&mut self.events)
     }
@@ -703,6 +755,19 @@ mod tests {
     fn idempotency_lookup_returns_none_by_default() {
         let ctx = fixture_ctx();
         assert!(ctx.idempotency_lookup(&[0u8; 16]).is_none());
+    }
+
+    #[test]
+    fn ensure_schema_version_rejects_mismatch_with_both_versions() {
+        assert!(ensure_schema_version(1, 1).is_ok());
+        let err = ensure_schema_version(1, 0xBEEF).expect_err("mismatch must reject");
+        match err {
+            ActionError::SchemaMismatch { expected, got } => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 0xBEEF);
+            }
+            other => panic!("expected SchemaMismatch, got {:?}", other),
+        }
     }
 
     #[test]

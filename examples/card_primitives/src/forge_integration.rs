@@ -36,8 +36,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use arkhe_forge_core::action::ActionCompute;
-use arkhe_forge_core::context::{ActionContext, ActionError};
+use arkhe_forge_core::action::{ActionCompute, ArkheAction as _};
+use arkhe_forge_core::context::{ensure_schema_version, ActionContext, ActionError};
 use arkhe_forge_core::{arkhe_pure, ArkheAction, ArkheEvent};
 
 use crate::shuffle_proof::{verify_shuffle_order, ShuffleCommitment};
@@ -170,6 +170,8 @@ pub struct HandShowdownLanded {
 impl ActionCompute for RecordHandShowdown {
     #[arkhe_pure]
     fn compute<'i>(&self, ctx: &mut ActionContext<'i>) -> Result<(), ActionError> {
+        // Stage 0 — wire schema-version gate (first check, fail-loud).
+        ensure_schema_version(Self::SCHEMA_VERSION, self.schema_version)?;
         // Stage 1 — commitment binding check. Recompute
         // `BLAKE3(domain || seed)` and compare against the broadcast
         // commitment. Both sides are lifted into `ShuffleCommitment`

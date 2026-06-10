@@ -38,13 +38,16 @@ const MLDSA65_SIG_LEN: usize = 3309;
 /// Domain-separation prefix bound into every L2 audit-receipt signature.
 ///
 /// Distinct from the kernel WAL-record domain
-/// (`arkhe-kernel v0.14 WAL record signature domain`) — signing
+/// (`arkhe-kernel v0.14 WAL record signature domain` — the kernel
+/// deliberately holds that literal at its v0.14 wording through the
+/// v0.15 epoch; only the chain `DOMAIN_CTX` advanced, so this cite must
+/// stay byte-matched, not version-synced) — signing
 /// `FORGE_RECEIPT_SIG_DOMAIN || message` scopes a signature to the
 /// audit-receipt domain so the same key reused in the WAL protocol (or
 /// any other) cannot yield a cross-valid signature (prevents
 /// cross-protocol key reuse). Applied symmetrically on sign and verify.
 pub(crate) const FORGE_RECEIPT_SIG_DOMAIN: &[u8] =
-    b"arkhe-forge v0.14 audit receipt attestation domain";
+    b"arkhe-forge v0.15 audit receipt attestation domain";
 
 /// Prefix `message` with the audit-receipt domain tag (`TAG ++ message`).
 ///
@@ -324,18 +327,21 @@ impl ReceiptSigner {
     /// Construct deterministically from a 32-byte seed (FIPS 204
     /// ML-DSA.KeyGen_internal — same seed yields the same key pair).
     ///
-    /// The caller's transient `seed` copy is scrubbed before return; the
-    /// long-lived [`ReceiptSigner`] retains the key material in the
-    /// `SigningKey`, which zeroizes on drop via the ml-dsa `zeroize`
-    /// feature.
+    /// Both transient seed copies (`seed` and the `B32` conversion) are
+    /// scrubbed before return; the long-lived [`ReceiptSigner`] retains
+    /// the key material in the `SigningKey`, which zeroizes on drop via
+    /// the ml-dsa `zeroize` feature.
     #[must_use]
     pub fn mldsa65_from_seed(mut seed: [u8; 32]) -> Self {
-        let xi: B32 = seed.into();
+        // `seed.into()` creates a second in-memory copy of the keygen
+        // seed; `B32` has no scrubbing Drop, so wipe it explicitly along
+        // with the caller's copy (mirrors the kernel's seed-scrub
+        // discipline).
+        let mut xi: B32 = seed.into();
         let signing_key = ml_dsa::SigningKey::<MlDsa65>::from_seed(&xi);
         let verifying_key_bytes = signing_key.verifying_key().encode().to_vec();
-        // Scrub the caller's transient seed copy; the SigningKey itself
-        // zeroizes on drop (ml-dsa `zeroize` feature).
         seed.zeroize();
+        xi.zeroize();
         Self {
             signing_key,
             verifying_key_bytes,
