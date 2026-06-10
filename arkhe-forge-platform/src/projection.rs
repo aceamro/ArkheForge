@@ -886,8 +886,13 @@ mod tests {
         assert_eq!(r.state(), ObserverState::Passive);
         r.begin_draining().unwrap();
         assert_eq!(r.state(), ObserverState::Draining);
-        // Draining is terminal — promote rejects.
+        // Draining is terminal — EVERY transition out rejects through the
+        // single gate: promote, the Draining → Passive resurrection edge,
+        // and a repeated drain.
         assert!(r.promote_to_active().is_err());
+        assert!(r.demote_to_passive().is_err());
+        assert!(r.begin_draining().is_err());
+        assert_eq!(r.state(), ObserverState::Draining);
     }
 
     #[test]
