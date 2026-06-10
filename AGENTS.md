@@ -248,11 +248,11 @@ examples depend on `-core`/`-platform` directly for teaching clarity only.
 | --- | --- | --- |
 | 1 | `#[derive(ArkheAction)]` emits forge-side **and** kernel-side `ActionCompute` (delegating to `bridge::kernel_compute`) | `arkhe-forge-macros/src/lib.rs:119-198` |
 | 2 | `#[arkhe_pure]` scans the compute body for clock/RNG/I/O/FFI/`unsafe` → `compile_error!` on violation | `arkhe-forge-macros/src/lib.rs:283-309` |
-| 3 | `RuntimeService::register_action::<A>()` registers the action with the kernel | `dispatcher.rs:117-119` |
+| 3 | `RuntimeService::register_action::<A>()` registers the action with the kernel | `dispatcher.rs` (`register_action`) |
 | 4 | `RuntimeService::dispatch()` runs the **C3 GDPR `ErasurePending` admission gate** on the authenticated actor, postcard-encodes the action, calls `kernel.submit` (actor threaded through, `caps` as the submission ceiling), then `kernel.step` (`caps` as the session ceiling) | `dispatcher.rs` |
 | 5 | the kernel appends a WAL `Submit` record at admission and a `Step` record (verdict + post-state digest) per pop — one dispatch = a Submit + Step pair; authority = `effective_caps(default_caps, principal, ceiling)` ∩ session ceiling, no `System` bypass | `arkhe-kernel 0.15` |
 | 6 | the kernel-side compute calls `bridge::kernel_compute`, which rebuilds an L1 `ActionContext`, runs the user `compute()`, drains `Vec<Op>` back to the kernel | `arkhe-forge-core/src/bridge.rs:105-149` |
-| 7 | `RuntimeService::export_wal` + `wal_to_sink` frame each **unmodified** `WalRecord` (`ARKHEXP1` magic + `u64` BE length prefix) | `dispatcher.rs:237-265`, `wal_export/mod.rs` |
+| 7 | `RuntimeService::export_wal` + `wal_to_sink` frame each **unmodified** `WalRecord` (`ARKHEXP1` magic + `u64` BE length prefix) | `dispatcher.rs` (`export_wal` + `wal_to_sink`), `wal_export/mod.rs` |
 | 8 | wire-stability tests assert the record section is bit-exact (DO NOT TOUCH #7) | `wal_export/wire_stability.rs:59-200` |
 | 9 | `verify_attestation` checks audit receipts under the policy-pinned class (Hybrid = AND-mode) | `verifier.rs:89-147` |
 | 10 | `ProjectionRouter` routes `EventRecord`s by TypeCode into denormalized read-models | `projection.rs` |
@@ -376,7 +376,7 @@ CVE deny).
 - **`ShellBrand<'s>`** — invariant-lifetime compile-time shell isolation (GhostCell pattern).
 - **ActorState (typestate)** — `Actor<'s, S>` is parameterized by a sealed state `S ∈ {Anonymous, Authenticated, Suspended}`; transitions consume `self`. Anonymous has no `UserBinding`; Authenticated binds a user (subject to the C3 gate); Suspended rejects actions.
 - **UserGdprState** — a user's erasure lifecycle: `Active` → `ErasurePending` (right-to-erasure requested; new actor actions blocked by C3) → `Erased` (tombstoned).
-- **C3** — the GDPR `ErasurePending` admission gate at the L2 dispatch boundary (`dispatcher.rs:194-217`): before an action reaches the kernel/WAL, the authenticated actor's user is checked; if `ErasurePending`/`Erased`, dispatch is rejected (`DispatchError::ErasurePending`). (E-user-3 admission control.)
+- **C3** — the GDPR `ErasurePending` admission gate at the L2 dispatch boundary (`dispatcher.rs`, the `dispatch` admission gate): before an action reaches the kernel/WAL, the authenticated actor's user is checked; if `ErasurePending`/`Erased`, dispatch is rejected (`DispatchError::ErasurePending`; a binding to a user with no `UserGdprState` rejects with `DispatchError::UnboundUserLifecycle`). (E-user-3 admission control.)
 - **Acting Actor** — the authenticated identity threaded from L2 dispatch into `ActionContext` (single source of truth; never from the wire — the C3 actor-substitution defense).
 - **Idempotency key** — optional `[u8;16]` dedup anchor; backed by a PG UNIQUE INDEX in production.
 - **TargetKey / Kind code** — activity target identity including `target_shell_id` (defeats cross-shell idempotency bypass).

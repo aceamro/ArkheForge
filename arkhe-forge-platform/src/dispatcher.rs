@@ -209,6 +209,11 @@ impl RuntimeService {
     ///
     /// * [`DispatchError::ErasurePending`] — the L2 gate rejected the
     ///   action (backing user in `GdprStatus::ErasurePending`).
+    /// * [`DispatchError::UnboundUserLifecycle`] — the actor's
+    ///   `UserBinding` resolves to a user with no `UserGdprState`
+    ///   (fail-closed admission for an unregistered binding target).
+    /// * [`DispatchError::ProbeViewCorrupt`] — the gate probe read
+    ///   corrupt view bytes; fail closed.
     /// * [`DispatchError::Kernel`] — kernel-side error from `submit`
     ///   (`InstanceNotFound` if `instance` is not live). Capability denial
     ///   happens inside `step` and is reflected in the returned report's

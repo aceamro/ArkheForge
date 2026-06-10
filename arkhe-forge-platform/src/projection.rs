@@ -119,7 +119,9 @@ pub enum ProjectionError {
     /// [`ProjectionRouter::dispatch`]).
     #[error("projection stream backward: last {last:?}, incoming {incoming:?}")]
     SequenceBackward {
-        /// Position of the last event the router accepted.
+        /// Stream head the incoming event was ordered against — the last
+        /// accepted event or, when a failed dispatch is awaiting retry,
+        /// the pinned unapplied position.
         last: ProjectionCursor,
         /// Position of the rejected incoming event.
         incoming: ProjectionCursor,
@@ -130,7 +132,9 @@ pub enum ProjectionError {
     /// needs to fetch the missing range before dispatch can advance.
     #[error("projection stream gap: last {last:?}, incoming {incoming:?}")]
     SequenceGap {
-        /// Position of the last event the router accepted.
+        /// Stream head the incoming event was ordered against — the last
+        /// accepted event or, when a failed dispatch is awaiting retry,
+        /// the pinned unapplied position.
         last: ProjectionCursor,
         /// Position of the event that exposed the gap.
         incoming: ProjectionCursor,
@@ -390,11 +394,13 @@ pub struct ProjectionRouter {
     /// ([`ProjectionError::PositionConflict`]).
     last_event: Option<(u32, Bytes)>,
     /// Position + identity (type code, payload) of the event a failed
-    /// fan-out left unapplied — set on every dispatch error, first or
-    /// mid-stream. Only a retry of this exact EVENT may proceed: a
-    /// skip-ahead would silently advance past the lost event, and a
-    /// DIFFERENT event at the same position would conflate same-tick
-    /// compute streams.
+    /// fan-out left unapplied — set on every failed fan-out (a
+    /// projection apply error), first or mid-stream; ordering
+    /// rejections never move it (re-pinning to a stray position would
+    /// deadlock the legitimate retry). Only a retry of this exact
+    /// EVENT may proceed: a skip-ahead would silently advance past the
+    /// lost event, and a DIFFERENT event at the same position would
+    /// conflate same-tick compute streams.
     pending_retry: Option<(ProjectionCursor, u32, Bytes)>,
     state: ObserverState,
 }
